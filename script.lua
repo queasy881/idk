@@ -91,6 +91,15 @@ local S = {
     conveyorAlert = false, autoCollect = false,
     fly = false, noclip = false, infJump = false, speedBoost = false,
     freecam = false, fullbright = false, antiAfk = false,
+    -- Killaura
+    killaura = false,
+    kaSwingRange = 18, kaAttackRange = 18, kaChargeTime = 0.42,
+    kaMaxAngle = 360, kaUpdateRate = 60, kaMaxTargets = 5,
+    kaRequireMouse = false, kaNoSwing = false, kaGuiCheck = false,
+    kaFaceTarget = false, kaLimitToSword = false,
+    kaShowTarget = false, kaTargetPlayers = true, kaTargetNPCs = true,
+    kaAttacking = false, kaTarget = nil,
+    kaBoxes = {}, kaConn = {},
     -- Values
     walkSpeed = 16, jumpPower = 50, flySpeed = 80, boostSpeed = 80,
     alertMinRarity = "Legendary",
@@ -106,6 +115,7 @@ local S = {
         fly = Enum.KeyCode.F,
         noclip = Enum.KeyCode.V,
         freecam = Enum.KeyCode.G,
+        killaura = Enum.KeyCode.K,
     },
     keybindListening = nil,
     -- Tab system
@@ -408,7 +418,7 @@ TabBar.Position = UDim2.new(0,8,0,76); TabBar.BackgroundTransparency = 1; TabBar
 local tly = Instance.new("UIListLayout", TabBar); tly.FillDirection = Enum.FillDirection.Horizontal
 tly.SortOrder = Enum.SortOrder.LayoutOrder; tly.Padding = UDim.new(0,3)
 
-local TABS = {"Brainrots", "Players", "Movement", "World", "Config"}
+local TABS = {"Brainrots", "Players", "Combat", "Movement", "World", "Config"}
 local tabButtons = {}
 
 local function switchTab(name)
@@ -721,6 +731,7 @@ mkKeybind("Config", "Brainrot ESP", "brainrotEsp")
 mkKeybind("Config", "Toggle Fly", "fly")
 mkKeybind("Config", "Toggle Noclip", "noclip")
 mkKeybind("Config", "Toggle Freecam", "freecam")
+mkKeybind("Config", "Toggle Killaura", "killaura")
 
 mkSection("Config", "Data")
 mkActionBtn("Config", "💾  Save Config", C.GREEN, function()
@@ -748,7 +759,7 @@ end)
 mkActionBtn("Config", "🗑️  Reset All", C.RED, function()
     local sv = PlayerGui:FindFirstChild("SABConfig"); if sv then sv:Destroy() end
     setWs(16); setJp(50); setFlySpd(80); setBoostSpd(80)
-    S.keybinds = {brainrotEsp = Enum.KeyCode.E, fly = Enum.KeyCode.F, noclip = Enum.KeyCode.V, freecam = Enum.KeyCode.G}
+    S.keybinds = {brainrotEsp = Enum.KeyCode.E, fly = Enum.KeyCode.F, noclip = Enum.KeyCode.V, freecam = Enum.KeyCode.G, killaura = Enum.KeyCode.K}
     pushNotification("Reset", "All settings cleared", C.ORANGE, 3)
 end)
 
@@ -822,6 +833,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
             elseif key == "fly" then forceFly(not S.fly)
             elseif key == "noclip" then forceNoclip(not S.noclip)
             elseif key == "freecam" then forceFreecam(not S.freecam)
+            elseif key == "killaura" then forceKillaura(not S.killaura)
             end
         end
     end
@@ -1106,8 +1118,495 @@ end
 local function stopAntiAfk() disconn("antiAfk") end
 
 --------------------------------------------------------------------------------
--- MAIN LOOP
+-- KILLAURA ENGINE (ported from 6872274481.lua — full logic)
 --------------------------------------------------------------------------------
+
+--[[ 
+    Sort methods — determines target priority ordering.
+    Mirrors the original: Damage, Health, Distance, Angle, Threat.
+    Some methods (Threat, Kit) require game-specific metadata not available in
+    a generic context so they fall back to Distance.
+]]
+local kaSortMethods = {
+    Distance = function(a, b)
+        local root = getRoot()
+        if not root then return false end
+        return (a.rootPart.Position - root.Position).Magnitude < (b.rootPart.Position - root.Position).Magnitude
+    end,
+    Health = function(a, b)
+        return (a.health or 999) < (b.health or 999)
+    end,
+    Angle = function(a, b)
+        local root = getRoot()
+        if not root then return false end
+        local selfPos = root.Position
+        local lookDir = root.CFrame.LookVector * Vector3.new(1, 0, 1)
+        local angA = math.acos(math.clamp(lookDir:Dot(((a.rootPart.Position - selfPos) * Vector3.new(1, 0, 1)).Unit), -1, 1))
+        local angB = math.acos(math.clamp(lookDir:Dot(((b.rootPart.Position - selfPos) * Vector3.new(1, 0, 1)).Unit), -1, 1))
+        return angA < angB
+    end,
+    Damage = function(a, b)
+        -- Prefer targets that were damaged most recently (via attribute if available)
+        local tA = 0; pcall(function() tA = a.character:GetAttribute("LastDamageTakenTime") or 0 end)
+        local tB = 0; pcall(function() tB = b.character:GetAttribute("LastDamageTakenTime") or 0 end)
+        return tA < tB
+    end,
+}
+
+--- Gather all valid enemy entities within range.
+--- Returns a list of {character, rootPart, health, humanoid, player}
+local function kaGetEntities(range, maxTargets, sortMethod, maxAngle, wallcheck, wantPlayers, wantNPCs)
+    local root = getRoot(); if not root then return {} end
+    local selfPos = root.Position
+    local lookDir = root.CFrame.LookVector * Vector3.new(1, 0, 1)
+    local results = {}
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if wantPlayers and plr ~= LocalPlayer and plr.Character then
+            local char = plr.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local rp = char:FindFirstChild("HumanoidRootPart")
+            if hum and rp and hum.Health > 0 then
+                local delta = rp.Position - selfPos
+                local dist = delta.Magnitude
+
+                if dist <= range then
+                    -- Angle check
+                    local flatDelta = (delta * Vector3.new(1, 0, 1))
+                    if flatDelta.Magnitude > 0 then
+                        local angle = math.acos(math.clamp(lookDir:Dot(flatDelta.Unit), -1, 1))
+                        if angle <= (math.rad(maxAngle) / 2) then
+                            -- Wallcheck (raycast between self and target)
+                            local blocked = false
+                            if wallcheck then
+                                local ray = Workspace:Raycast(selfPos, delta.Unit * dist, RaycastParams.new())
+                                if ray and ray.Instance and not ray.Instance:IsDescendantOf(char) and not ray.Instance:IsDescendantOf(LocalPlayer.Character) then
+                                    blocked = true
+                                end
+                            end
+
+                            if not blocked then
+                                table.insert(results, {
+                                    character = char,
+                                    rootPart = rp,
+                                    humanoid = hum,
+                                    health = hum.Health,
+                                    player = plr,
+                                    distance = dist,
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- NPC support: scan workspace for non-player humanoid models
+    if wantNPCs then
+        for _, child in ipairs(Workspace:GetDescendants()) do
+            if child:IsA("Humanoid") and child.Health > 0 then
+                local char = child.Parent
+                if char and char:IsA("Model") and not Players:GetPlayerFromCharacter(char) and char ~= LocalPlayer.Character then
+                    local rp = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+                    if rp then
+                        local delta = rp.Position - selfPos
+                        local dist = delta.Magnitude
+                        if dist <= range then
+                            local flatDelta = (delta * Vector3.new(1, 0, 1))
+                            if flatDelta.Magnitude > 0 then
+                                local angle = math.acos(math.clamp(lookDir:Dot(flatDelta.Unit), -1, 1))
+                                if angle <= (math.rad(maxAngle) / 2) then
+                                    local blocked = false
+                                    if wallcheck then
+                                        local ray = Workspace:Raycast(selfPos, delta.Unit * dist, RaycastParams.new())
+                                        if ray and ray.Instance and not ray.Instance:IsDescendantOf(char) and not ray.Instance:IsDescendantOf(LocalPlayer.Character) then
+                                            blocked = true
+                                        end
+                                    end
+                                    if not blocked then
+                                        table.insert(results, {
+                                            character = char,
+                                            rootPart = rp,
+                                            humanoid = child,
+                                            health = child.Health,
+                                            player = nil,
+                                            distance = dist,
+                                        })
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Sort
+    local sortFn = kaSortMethods[sortMethod] or kaSortMethods.Distance
+    table.sort(results, function(a, b)
+        local ok, res = pcall(sortFn, a, b)
+        return ok and res or false
+    end)
+
+    -- Limit
+    if maxTargets and #results > maxTargets then
+        local trimmed = {}
+        for i = 1, maxTargets do trimmed[i] = results[i] end
+        return trimmed
+    end
+
+    return results
+end
+
+--- Try to find and equip a sword tool from the player's backpack.
+--- Mirrors the original switchItem logic.
+local function kaFindSword()
+    local char = LocalPlayer.Character; if not char then return nil, nil end
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    local bestTool, bestDamage = nil, 0
+
+    -- Check character equipped tools
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Tool") then
+            local nm = child.Name:lower()
+            if nm:find("sword") or nm:find("blade") or nm:find("knife") or nm:find("weapon") or nm:find("katana") or nm:find("axe") then
+                return child, true -- already equipped
+            end
+        end
+    end
+
+    -- Check backpack
+    if backpack then
+        for _, child in ipairs(backpack:GetChildren()) do
+            if child:IsA("Tool") then
+                local nm = child.Name:lower()
+                if nm:find("sword") or nm:find("blade") or nm:find("knife") or nm:find("weapon") or nm:find("katana") or nm:find("axe") then
+                    local dmg = 0
+                    pcall(function() dmg = child:GetAttribute("Damage") or 0 end)
+                    if dmg >= bestDamage then
+                        bestTool = child; bestDamage = dmg
+                    end
+                end
+            end
+        end
+    end
+
+    return bestTool, false
+end
+
+--- Equip a tool by parenting it to the character (standard Roblox equip).
+local function kaEquipTool(tool)
+    if not tool then return end
+    local char = LocalPlayer.Character
+    if char and tool.Parent ~= char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then hum:EquipTool(tool) end
+    end
+end
+
+--- Swing / attack a single target. Uses ClickDetector, remote, or Tool:Activate().
+--- Mirrors the original AttackRemote:FireServer pattern with fallbacks.
+local function kaAttackTarget(target, tool)
+    if not target or not target.rootPart then return end
+
+    -- Method 1: Fire any "Attack" remote if found (game-specific)
+    local attackRemote = nil
+    pcall(function()
+        for _, v in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+            if (v:IsA("RemoteEvent") or v:IsA("RemoteFunction")) and v.Name:lower():find("attack") then
+                attackRemote = v; break
+            end
+        end
+    end)
+
+    local selfPos = getRoot() and getRoot().Position or Vector3.zero
+    local dir = CFrame.lookAt(selfPos, target.rootPart.Position).LookVector
+
+    if attackRemote and attackRemote:IsA("RemoteEvent") then
+        pcall(function()
+            attackRemote:FireServer({
+                weapon = tool,
+                chargedAttack = {chargeRatio = 0},
+                lastSwingServerTimeDelta = 0.5,
+                entityInstance = target.character,
+                validate = {
+                    raycast = {
+                        cameraPosition = {value = selfPos},
+                        cursorDirection = {value = dir},
+                    },
+                    targetPosition = {value = target.rootPart.Position},
+                    selfPosition = {value = selfPos},
+                },
+            })
+        end)
+    end
+
+    -- Method 2: Activate the tool (generic Roblox sword behavior)
+    if tool and tool:IsA("Tool") then
+        pcall(function() tool:Activate() end)
+    end
+end
+
+--- Face toward a target (mirrors Face target toggle)
+local function kaFaceTarget(target)
+    local root = getRoot(); if not root or not target or not target.rootPart then return end
+    local tPos = target.rootPart.Position * Vector3.new(1, 0, 1)
+    root.CFrame = CFrame.lookAt(
+        root.Position,
+        Vector3.new(tPos.X, root.Position.Y + 0.001, tPos.Z)
+    )
+end
+
+--- Show target boxes (mirrors the BoxHandleAdornment logic)
+local function kaUpdateBoxes(attacked)
+    -- Create boxes on demand
+    while #S.kaBoxes < 10 do
+        local box = Instance.new("BoxHandleAdornment")
+        box.Adornee = nil
+        box.AlwaysOnTop = true
+        box.Size = Vector3.new(3, 5, 3)
+        box.CFrame = CFrame.new(0, -0.5, 0)
+        box.ZIndex = 0
+        box.Color3 = C.RED
+        box.Transparency = 0.5
+        box.Parent = Gui
+        table.insert(S.kaBoxes, box)
+    end
+
+    for i, box in ipairs(S.kaBoxes) do
+        if attacked[i] then
+            box.Adornee = attacked[i].rootPart
+            -- Color based on whether in attack range or only swing range
+            if attacked[i].distance and attacked[i].distance <= S.kaAttackRange then
+                box.Color3 = C.RED
+                box.Transparency = 0.4
+            else
+                box.Color3 = C.CYAN
+                box.Transparency = 0.6
+            end
+        else
+            box.Adornee = nil
+        end
+    end
+end
+
+local function kaClearBoxes()
+    for _, box in ipairs(S.kaBoxes) do
+        box.Adornee = nil
+        box:Destroy()
+    end
+    S.kaBoxes = {}
+end
+
+--- Main killaura loop — runs as a coroutine when enabled.
+--- Mirrors the original repeat/until Killaura.Enabled pattern exactly.
+local function kaMainLoop()
+    while S.killaura do
+        local attacked = {}
+        S.kaAttacking = false
+        S.kaTarget = nil
+
+        -- Pre-checks (mirrors getAttackData)
+        local canAttack = true
+
+        if S.kaRequireMouse then
+            if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                canAttack = false
+            end
+        end
+
+        if S.kaGuiCheck then
+            -- Skip if any ScreenGui (other than ours) is actively capturing input
+            -- Mirrors: bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN)
+            -- In a generic context we check if a TextBox is focused
+            if UserInputService:GetFocusedTextBox() then
+                canAttack = false
+            end
+        end
+
+        -- Limit to sword: only attack when holding a sword-like tool
+        local currentTool = nil
+        if S.kaLimitToSword then
+            local char = LocalPlayer.Character
+            if char then
+                for _, child in ipairs(char:GetChildren()) do
+                    if child:IsA("Tool") then
+                        local nm = child.Name:lower()
+                        if nm:find("sword") or nm:find("blade") or nm:find("knife") or nm:find("weapon") or nm:find("katana") or nm:find("axe") then
+                            currentTool = child
+                        end
+                    end
+                end
+            end
+            if not currentTool then canAttack = false end
+        else
+            -- Auto-find and equip sword
+            local sword, isEquipped = kaFindSword()
+            if sword then
+                if not isEquipped then kaEquipTool(sword) end
+                currentTool = sword
+            end
+        end
+
+        if canAttack and getRoot() then
+            -- Get targets (mirrors entitylib.AllPosition call)
+            local targets = kaGetEntities(
+                S.kaSwingRange,
+                S.kaMaxTargets,
+                S.kaSortMode or "Distance",
+                S.kaMaxAngle,
+                false, -- wallcheck (toggle-able in original via Targets.Walls)
+                S.kaTargetPlayers,
+                S.kaTargetNPCs
+            )
+
+            if #targets > 0 then
+                local swingCooldown = 0
+                local selfPos = getRoot().Position
+
+                for _, target in ipairs(targets) do
+                    local delta = target.rootPart.Position - selfPos
+                    local dist = delta.Magnitude
+
+                    table.insert(attacked, target)
+
+                    if not S.kaAttacking then
+                        S.kaAttacking = true
+                        S.kaTarget = target
+
+                        -- Swing visual (mirrors playSwordEffect)
+                        if not S.kaNoSwing and currentTool and currentTool:IsA("Tool") then
+                            pcall(function() currentTool:Activate() end)
+                        end
+                    end
+
+                    -- Only fire the actual attack remote if within attack range
+                    -- Mirrors: if delta.Magnitude > AttackRange.Value then continue end
+                    if dist <= S.kaAttackRange then
+                        if (tick() - swingCooldown) >= math.max(S.kaChargeTime, 0.02) then
+                            swingCooldown = tick()
+                            kaAttackTarget(target, currentTool)
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Update target boxes if showing
+        if S.kaShowTarget then
+            kaUpdateBoxes(attacked)
+        end
+
+        -- Face target (mirrors Face.Enabled check)
+        if S.kaFaceTarget and attacked[1] then
+            kaFaceTarget(attacked[1])
+        end
+
+        -- Wait at the configured update rate (mirrors task.wait(1 / UpdateRate.Value))
+        task.wait(1 / math.max(S.kaUpdateRate, 1))
+    end
+
+    -- Cleanup on disable (mirrors the else branch)
+    S.kaTarget = nil
+    S.kaAttacking = false
+    if S.kaShowTarget then kaClearBoxes() end
+end
+
+--- Start / stop killaura
+local function kaStart()
+    if S.kaConn["loop"] then return end
+    S.killaura = true
+    S.kaConn["loop"] = task.spawn(function()
+        kaMainLoop()
+    end)
+end
+
+local function kaStop()
+    S.killaura = false
+    S.kaTarget = nil
+    S.kaAttacking = false
+    if S.kaConn["loop"] then
+        pcall(function() task.cancel(S.kaConn["loop"]) end)
+        S.kaConn["loop"] = nil
+    end
+    kaClearBoxes()
+end
+
+--------------------------------------------------------------------------------
+-- ██ COMBAT TAB ██  (Killaura UI — mirrors every toggle/slider from original)
+--------------------------------------------------------------------------------
+mkSection("Combat", "Killaura")
+local _, _, forceKillaura = mkToggle("Combat", "⚔️ Killaura", false, function(v)
+    if v then kaStart() else kaStop() end
+end)
+S.kaSortMode = "Distance"
+
+mkSection("Combat", "Range & Timing")
+mkSlider("Combat", "Swing Range", 1, 18, 18, function(v) S.kaSwingRange = v end)
+mkSlider("Combat", "Attack Range", 1, 18, 18, function(v) S.kaAttackRange = v end)
+
+-- ChargeTime needs decimal support; we use min=0 max=50 mapped to 0..0.50
+local _, _, forceChargeSlider
+do
+    local p = S.tabFrames["Combat"]; if p then
+        local val = 42 -- represents 0.42
+        local row = Instance.new("Frame", p); row.Name = "Slider_SwingTime"; row.Size = UDim2.new(1,0,0,46)
+        row.BackgroundColor3 = C.BG2; row.BackgroundTransparency = 0.4; row.BorderSizePixel = 0; row.LayoutOrder = nOrd("Combat")
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0,6)
+        local lbl = Instance.new("TextLabel", row); lbl.Size = UDim2.new(0.6,0,0,18); lbl.Position = UDim2.new(0,10,0,3)
+        lbl.BackgroundTransparency = 1; lbl.Text = "Swing Time"; lbl.TextColor3 = C.TEXT1; lbl.TextSize = 12; lbl.Font = Enum.Font.GothamMedium; lbl.TextXAlignment = Enum.TextXAlignment.Left
+        local vl2 = Instance.new("TextLabel", row); vl2.Size = UDim2.new(0.35,0,0,18); vl2.Position = UDim2.new(0.6,0,0,3)
+        vl2.BackgroundTransparency = 1; vl2.Text = "0.42"; vl2.TextColor3 = C.ACCENT; vl2.TextSize = 12; vl2.Font = Enum.Font.GothamBold; vl2.TextXAlignment = Enum.TextXAlignment.Right
+        local trk = Instance.new("Frame", row); trk.Size = UDim2.new(1,-20,0,5); trk.Position = UDim2.new(0,10,0,30)
+        trk.BackgroundColor3 = C.SLIDER_TRACK; trk.BorderSizePixel = 0; Instance.new("UICorner", trk).CornerRadius = UDim.new(1,0)
+        local pct = val / 50
+        local fill = Instance.new("Frame", trk); fill.Size = UDim2.new(pct,0,1,0); fill.BackgroundColor3 = C.ACCENT; fill.BorderSizePixel = 0; Instance.new("UICorner", fill).CornerRadius = UDim.new(1,0)
+        local sk = Instance.new("Frame", trk); sk.Size = UDim2.new(0,12,0,12); sk.Position = UDim2.new(pct,-6,0.5,-6)
+        sk.BackgroundColor3 = Color3.new(1,1,1); sk.BorderSizePixel = 0; sk.ZIndex = 2; Instance.new("UICorner", sk).CornerRadius = UDim.new(1,0)
+        Instance.new("UIStroke", sk).Color = C.ACCENT; sk:FindFirstChildOfClass("UIStroke").Thickness = 2
+        local dragging = false
+        local function upd(p2) p2 = math.clamp(p2,0,1); val = math.floor(p2 * 50); S.kaChargeTime = val / 100; vl2.Text = string.format("%.2f", val/100); fill.Size = UDim2.new(p2,0,1,0); sk.Position = UDim2.new(p2,-6,0.5,-6) end
+        local sb = Instance.new("TextButton", trk); sb.Size = UDim2.new(1,0,0,20); sb.Position = UDim2.new(0,0,0,-8); sb.BackgroundTransparency = 1; sb.Text = ""
+        sb.MouseButton1Down:Connect(function() dragging = true end)
+        UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+        RunService.RenderStepped:Connect(function() if dragging then upd((UserInputService:GetMouseLocation().X - trk.AbsolutePosition.X) / trk.AbsoluteSize.X) end end)
+        table.insert(S.allRows, {frame = row, label = "swing time", tab = "Combat"})
+    end
+end
+
+mkSlider("Combat", "Max Angle", 1, 360, 360, function(v) S.kaMaxAngle = v end)
+mkSlider("Combat", "Update Rate (hz)", 1, 120, 60, function(v) S.kaUpdateRate = v end)
+mkSlider("Combat", "Max Targets", 1, 5, 5, function(v) S.kaMaxTargets = v end)
+
+mkSection("Combat", "Target Mode")
+-- Dropdown-like using action buttons to select sort mode
+for _, mode in ipairs({"Distance", "Health", "Angle", "Damage"}) do
+    mkActionBtn("Combat", "🎯  Sort: " .. mode, (S.kaSortMode == mode) and C.ACCENT or C.BG4, function()
+        S.kaSortMode = mode
+        pushNotification("Target Mode", "Set to " .. mode, C.ACCENT, 2)
+    end)
+end
+
+mkSection("Combat", "Behavior")
+mkToggle("Combat", "🖱️ Require Mouse Down", false, function(v) S.kaRequireMouse = v end)
+mkToggle("Combat", "🚫 No Swing Animation", false, function(v) S.kaNoSwing = v end)
+mkToggle("Combat", "📋 GUI Check", false, function(v) S.kaGuiCheck = v end)
+mkToggle("Combat", "🎯 Face Target", false, function(v) S.kaFaceTarget = v end)
+mkToggle("Combat", "🗡️ Limit to Sword", false, function(v) S.kaLimitToSword = v end)
+
+mkSection("Combat", "Targets")
+mkToggle("Combat", "👤 Target Players", true, function(v) S.kaTargetPlayers = v end)
+mkToggle("Combat", "🤖 Target NPCs", true, function(v) S.kaTargetNPCs = v end)
+
+mkSection("Combat", "Visuals")
+mkToggle("Combat", "📦 Show Target Boxes", false, function(v)
+    S.kaShowTarget = v
+    if not v then kaClearBoxes() end
+end)
+
+
 local tick2 = 0
 S.conn["main"] = RunService.RenderStepped:Connect(function(dt)
     tick2 += 1
@@ -1148,6 +1647,7 @@ local function onCharAdded(char)
     if S.fly then disableFly(); task.wait(0.2); enableFly() end
     if S.noclip then stopNoclip(); task.wait(0.1); startNoclip() end
     if S.speedBoost then stopBoost(); task.wait(0.1); startBoost() end
+    if S.killaura then kaStop(); task.wait(0.3); kaStart() end
 end
 LocalPlayer.CharacterAdded:Connect(onCharAdded)
 if LocalPlayer.Character then task.spawn(function() onCharAdded(LocalPlayer.Character) end) end
