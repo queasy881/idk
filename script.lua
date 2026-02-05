@@ -1124,107 +1124,201 @@ local function stopAntiAfk() disconn("antiAfk") end
 
 --------------------------------------------------------------------------------
 -- BEDWARS INTERNALS LOADER
--- Hooks into Knit, SwordController, remotes, ItemMeta — exactly as 6872274481.lua
+-- Seliware-compatible: no debug.getconstants/getupvalue/getproto needed
 --------------------------------------------------------------------------------
 task.spawn(function()
     local lplr = LocalPlayer
     local replicatedStorage = game:GetService("ReplicatedStorage")
+    local collectionService = game:GetService("CollectionService")
+    local attempts = {}
 
-    -- Wait for Knit to initialize (mirrors the original repeat/until pattern)
-    local KnitInit, Knit
+    -- Wait for game to load
+    task.wait(2)
+
+    ---- STEP 1: Get the Client networking object (from @rbxts/net) ----
     pcall(function()
-        repeat
-            KnitInit, Knit = pcall(function()
-                return debug.getupvalue(require(lplr.PlayerScripts.TS.knit).setup, 9)
-            end)
-            if KnitInit then return end
-            task.wait(0.5)
-        until KnitInit
+        S.bwClient = require(replicatedStorage.TS.remotes).default.Client
+        table.insert(attempts, "Client loaded")
     end)
 
-    if not Knit then
-        warn("[SAB Killaura] Knit not found — not a Bedwars game or unsupported version")
-        S.bwLoaded = false
-        return
-    end
-
-    -- Wait for Knit to fully start
+    ---- STEP 2: Get ItemMeta (try direct require, no debug needed) ----
     pcall(function()
-        if not debug.getupvalue(Knit.Start, 1) then
-            repeat task.wait(0.2) until debug.getupvalue(Knit.Start, 1)
+        local itemMetaModule = require(replicatedStorage.TS.item['item-meta'])
+        -- Try calling getItemMeta if it exists
+        if itemMetaModule.getItemMeta then
+            local ok, result = pcall(itemMetaModule.getItemMeta)
+            if ok and type(result) == "table" then
+                S.bwItemMeta = result
+            end
+        end
+        -- If it's the table directly
+        if not S.bwItemMeta and type(itemMetaModule) == "table" then
+            for k, v in pairs(itemMetaModule) do
+                if type(v) == "table" and v.sword then
+                    S.bwItemMeta = itemMetaModule
+                    break
+                end
+            end
         end
     end)
 
-    S.bwKnit = Knit
-
-    -- Get Client remotes module
-    pcall(function()
-        S.bwClient = require(replicatedStorage.TS.remotes).default.Client
-    end)
-
-    -- Get SwordController
-    pcall(function()
-        S.bwSwordController = Knit.Controllers.SwordController
-    end)
-
-    -- Get ItemMeta
-    pcall(function()
-        S.bwItemMeta = debug.getupvalue(require(replicatedStorage.TS.item['item-meta']).getItemMeta, 1)
-    end)
-
-    -- Get CombatConstant
+    ---- STEP 3: Get CombatConstant ----
     pcall(function()
         S.bwCombatConstant = require(replicatedStorage.TS.combat['combat-constant']).CombatConstant
     end)
 
-    -- Dump the AttackEntity remote name (exactly as original dumpRemote)
-    local attackRemoteName = nil
-    pcall(function()
-        local sendServerRequest = Knit.Controllers.SwordController.sendServerRequest
-        local constants = debug.getconstants(sendServerRequest)
-        local ind = nil
-        for i, v in ipairs(constants) do
-            if v == 'Client' then
-                ind = i
-                break
-            end
-        end
-        if ind then
-            attackRemoteName = constants[ind + 1]
-        end
-    end)
+    ---- STEP 4: Find the attack remote ----
+    -- The attack remote is a RemoteEvent inside the @rbxts/net remotes folder.
+    -- In Bedwars, remotes live under a folder in ReplicatedStorage (typically
+    -- ReplicatedStorage.rbxts_include.node_modules.@rbxts.net or similar paths).
+    -- The Client:Get(name).instance pattern returns the RemoteEvent.
+    -- Since we can't dump the remote name via debug, we use multiple strategies:
 
-    -- Get the actual attack remote instance
-    if attackRemoteName and S.bwClient then
+    -- Strategy A: hookmetamethod __namecall to intercept the next sword FireServer
+    if not S.bwAttackRemote and hookmetamethod then
         pcall(function()
-            local OldGet = S.bwClient.Get
-            local call = OldGet(S.bwClient, attackRemoteName)
-            if call and call.instance then
-                S.bwAttackRemote = call.instance
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod()
+                if method == "FireServer" and self:IsA("RemoteEvent") then
+                    local args = {...}
+                    -- Detect the attack payload shape from the original:
+                    -- {weapon=, chargedAttack=, lastSwingServerTimeDelta=, entityInstance=, validate=}
+                    if type(args[1]) == "table" and args[1].entityInstance and args[1].validate and args[1].weapon then
+                        S.bwAttackRemote = self
+                        table.insert(attempts, "Strategy A: __namecall hook captured remote")
+                        -- Restore original hook
+                        hookmetamethod(game, "__namecall", oldNamecall)
+                    end
+                end
+                return oldNamecall(self, ...)
+            end)
+
+            -- Wait up to 30s for a natural sword swing to capture the remote
+            for i = 1, 60 do
+                if S.bwAttackRemote then break end
+                task.wait(0.5)
+            end
+
+            -- Cleanup if not triggered
+            if not S.bwAttackRemote then
+                pcall(function() hookmetamethod(game, "__namecall", oldNamecall) end)
             end
         end)
     end
 
-    -- Also dump EquipItem remote
+    -- Strategy B: Scan all RemoteEvents and test via Client:Get
+    if not S.bwAttackRemote and S.bwClient then
+        pcall(function()
+            -- The @rbxts/net Client stores remotes internally. 
+            -- We can try to iterate its internal cache.
+            -- Client typically has a _listeners or _events table, or we can
+            -- scan the Client table itself
+            for key, val in pairs(S.bwClient) do
+                if type(val) == "table" and val.instance and typeof(val.instance) == "Instance" then
+                    if val.instance:IsA("RemoteEvent") then
+                        -- Check if the key name suggests attack
+                        local keyStr = tostring(key):lower()
+                        if keyStr:find("attack") or keyStr:find("sword") or keyStr:find("combat") or keyStr:find("hit") then
+                            S.bwAttackRemote = val.instance
+                            table.insert(attempts, "Strategy B: Client cache key '" .. tostring(key) .. "'")
+                            break
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
+    -- Strategy C: Scan RemoteEvents in ReplicatedStorage descendants
+    if not S.bwAttackRemote then
+        pcall(function()
+            local candidates = {}
+            for _, desc in ipairs(replicatedStorage:GetDescendants()) do
+                if desc:IsA("RemoteEvent") then
+                    local nm = desc.Name:lower()
+                    -- Bedwars remote names are often hashed/obfuscated strings,
+                    -- but some contain readable substrings
+                    if nm:find("attack") or nm:find("sword") or nm:find("melee") or nm:find("combat") then
+                        table.insert(candidates, {remote = desc, priority = 1})
+                    end
+                end
+            end
+            -- Sort by priority (most specific match first)
+            table.sort(candidates, function(a, b) return a.priority < b.priority end)
+            if #candidates > 0 then
+                S.bwAttackRemote = candidates[1].remote
+                table.insert(attempts, "Strategy C: ReplicatedStorage scan '" .. candidates[1].remote.Name .. "'")
+            end
+        end)
+    end
+
+    -- Strategy D: If hookmetamethod not available, use hookfunction on FireServer
+    if not S.bwAttackRemote and hookfunction then
+        pcall(function()
+            -- Find any RemoteEvent and hook its FireServer
+            local anyRemote = replicatedStorage:FindFirstChildWhichIsA("RemoteEvent", true)
+            if anyRemote then
+                local mt = getmetatable(anyRemote)
+                if mt and mt.__namecall then
+                    -- Already tried above
+                end
+            end
+        end)
+    end
+
+    -- Strategy E: Last resort — intercept via wrapping the Client:Get method
+    if not S.bwAttackRemote and S.bwClient then
+        pcall(function()
+            local originalGet = S.bwClient.Get
+            S.bwClient.Get = function(self, remoteName, ...)
+                local result = originalGet(self, remoteName, ...)
+                if result and result.instance and typeof(result.instance) == "Instance" then
+                    -- Cache every remote we see
+                    if not S.bwRemoteCache then S.bwRemoteCache = {} end
+                    S.bwRemoteCache[remoteName] = result.instance
+                end
+                return result
+            end
+            table.insert(attempts, "Strategy E: Wrapped Client:Get for future capture")
+        end)
+    end
+
+    ---- STEP 5: Get SwordController (via require, not Knit.Controllers) ----
     pcall(function()
-        local equipFunc = debug.getproto(
-            require(replicatedStorage.TS.entity.entities['inventory-entity']).InventoryEntity.equipItem, 3
-        )
-        local constants = debug.getconstants(equipFunc)
-        local ind = nil
-        for i, v in ipairs(constants) do
-            if v == 'Client' then ind = i; break end
-        end
-        if ind then
-            S.bwEquipRemoteName = constants[ind + 1]
+        -- Try the PlayerScripts path
+        local controllers = lplr.PlayerScripts:FindFirstChild("TS")
+        if controllers then
+            local swordPath = controllers:FindFirstChild("controllers")
+            if swordPath then
+                for _, desc in ipairs(swordPath:GetDescendants()) do
+                    if desc:IsA("ModuleScript") and desc.Name:lower():find("sword") then
+                        local ok, mod = pcall(require, desc)
+                        if ok and type(mod) == "table" then
+                            for k, v in pairs(mod) do
+                                if type(v) == "table" and (v.sendServerRequest or v.attackEntity or v.playSwordEffect) then
+                                    S.bwSwordController = v
+                                    table.insert(attempts, "SwordController found via require")
+                                    break
+                                end
+                            end
+                        end
+                        if S.bwSwordController then break end
+                    end
+                end
+            end
         end
     end)
 
+    ---- RESULT ----
     S.bwLoaded = (S.bwAttackRemote ~= nil)
+    local msg = table.concat(attempts, " | ")
     if S.bwLoaded then
-        print("[SAB Killaura] Bedwars internals loaded — attack remote found")
+        print("[SAB Killaura] ✅ Attack remote FOUND — " .. msg)
     else
-        warn("[SAB Killaura] Could not find attack remote — killaura will use fallback")
+        warn("[SAB Killaura] ⚠ Remote not found yet — " .. msg)
+        warn("[SAB Killaura] Will auto-capture on first sword swing (Strategy E active)")
+        warn("[SAB Killaura] Fallback Tool:Activate() active until then")
     end
 end)
 
@@ -1425,32 +1519,49 @@ local function kaFireAttack(target, weaponTool, selfPos)
     local dist = (actualRoot.Position - selfPos).Magnitude
     local pos = selfPos + dir * math.max(dist - 14.399, 0)
 
-    -- Method 1: Bedwars native remote (exact payload from original)
+    local attackPayload = {
+        weapon = weaponTool,
+        chargedAttack = {chargeRatio = 0},
+        lastSwingServerTimeDelta = 0.5,
+        entityInstance = target.character,
+        validate = {
+            raycast = {
+                cameraPosition = {value = pos},
+                cursorDirection = {value = dir}
+            },
+            targetPosition = {value = actualRoot.Position},
+            selfPosition = {value = pos}
+        }
+    }
+
+    -- Method 1: Direct Bedwars attack remote
     if S.bwAttackRemote then
         pcall(function()
-            S.bwAttackRemote:FireServer({
-                weapon = weaponTool,
-                chargedAttack = {chargeRatio = 0},
-                lastSwingServerTimeDelta = 0.5,
-                entityInstance = target.character,
-                validate = {
-                    raycast = {
-                        cameraPosition = {value = pos},
-                        cursorDirection = {value = dir}
-                    },
-                    targetPosition = {value = actualRoot.Position},
-                    selfPosition = {value = pos}
-                }
-            })
+            S.bwAttackRemote:FireServer(attackPayload)
         end)
     end
 
-    -- Method 2: Fallback — Tool:Activate() for non-Bedwars or if remote failed
+    -- Method 2: Check Strategy E wrapped cache for any attack-like remote
+    if not S.bwAttackRemote and S.bwRemoteCache then
+        for name, remote in pairs(S.bwRemoteCache) do
+            local nm = tostring(name):lower()
+            if nm:find("attack") or nm:find("sword") or nm:find("combat") then
+                pcall(function()
+                    S.bwAttackRemote = remote  -- cache it for future use
+                    remote:FireServer(attackPayload)
+                    print("[SAB Killaura] ✅ Captured remote via Strategy E: " .. tostring(name))
+                end)
+                break
+            end
+        end
+    end
+
+    -- Method 3: Fallback — Tool:Activate()
     if not S.bwAttackRemote and weaponTool and weaponTool:IsA("Tool") then
         pcall(function() weaponTool:Activate() end)
     end
 
-    -- Update lastAttack on SwordController (prevents double-swing detection)
+    -- Update lastAttack on SwordController
     if S.bwSwordController then
         pcall(function()
             S.bwSwordController.lastAttack = Workspace:GetServerTimeNow()
