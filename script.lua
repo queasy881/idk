@@ -100,6 +100,11 @@ local S = {
     kaShowTarget = false, kaTargetPlayers = true, kaTargetNPCs = true,
     kaAttacking = false, kaTarget = nil,
     kaBoxes = {}, kaConn = {},
+    kaSortMode = "Distance",
+    -- Bedwars internals (populated at runtime)
+    bwKnit = nil, bwClient = nil, bwAttackRemote = nil,
+    bwSwordController = nil, bwItemMeta = nil, bwCombatConstant = nil,
+    bwLoaded = false,
     -- Values
     walkSpeed = 16, jumpPower = 50, flySpeed = 80, boostSpeed = 80,
     alertMinRarity = "Legendary",
@@ -1118,124 +1123,211 @@ end
 local function stopAntiAfk() disconn("antiAfk") end
 
 --------------------------------------------------------------------------------
--- KILLAURA ENGINE (ported from 6872274481.lua — full logic)
+-- BEDWARS INTERNALS LOADER
+-- Hooks into Knit, SwordController, remotes, ItemMeta — exactly as 6872274481.lua
+--------------------------------------------------------------------------------
+task.spawn(function()
+    local lplr = LocalPlayer
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+
+    -- Wait for Knit to initialize (mirrors the original repeat/until pattern)
+    local KnitInit, Knit
+    pcall(function()
+        repeat
+            KnitInit, Knit = pcall(function()
+                return debug.getupvalue(require(lplr.PlayerScripts.TS.knit).setup, 9)
+            end)
+            if KnitInit then return end
+            task.wait(0.5)
+        until KnitInit
+    end)
+
+    if not Knit then
+        warn("[SAB Killaura] Knit not found — not a Bedwars game or unsupported version")
+        S.bwLoaded = false
+        return
+    end
+
+    -- Wait for Knit to fully start
+    pcall(function()
+        if not debug.getupvalue(Knit.Start, 1) then
+            repeat task.wait(0.2) until debug.getupvalue(Knit.Start, 1)
+        end
+    end)
+
+    S.bwKnit = Knit
+
+    -- Get Client remotes module
+    pcall(function()
+        S.bwClient = require(replicatedStorage.TS.remotes).default.Client
+    end)
+
+    -- Get SwordController
+    pcall(function()
+        S.bwSwordController = Knit.Controllers.SwordController
+    end)
+
+    -- Get ItemMeta
+    pcall(function()
+        S.bwItemMeta = debug.getupvalue(require(replicatedStorage.TS.item['item-meta']).getItemMeta, 1)
+    end)
+
+    -- Get CombatConstant
+    pcall(function()
+        S.bwCombatConstant = require(replicatedStorage.TS.combat['combat-constant']).CombatConstant
+    end)
+
+    -- Dump the AttackEntity remote name (exactly as original dumpRemote)
+    local attackRemoteName = nil
+    pcall(function()
+        local sendServerRequest = Knit.Controllers.SwordController.sendServerRequest
+        local constants = debug.getconstants(sendServerRequest)
+        local ind = nil
+        for i, v in ipairs(constants) do
+            if v == 'Client' then
+                ind = i
+                break
+            end
+        end
+        if ind then
+            attackRemoteName = constants[ind + 1]
+        end
+    end)
+
+    -- Get the actual attack remote instance
+    if attackRemoteName and S.bwClient then
+        pcall(function()
+            local OldGet = S.bwClient.Get
+            local call = OldGet(S.bwClient, attackRemoteName)
+            if call and call.instance then
+                S.bwAttackRemote = call.instance
+            end
+        end)
+    end
+
+    -- Also dump EquipItem remote
+    pcall(function()
+        local equipFunc = debug.getproto(
+            require(replicatedStorage.TS.entity.entities['inventory-entity']).InventoryEntity.equipItem, 3
+        )
+        local constants = debug.getconstants(equipFunc)
+        local ind = nil
+        for i, v in ipairs(constants) do
+            if v == 'Client' then ind = i; break end
+        end
+        if ind then
+            S.bwEquipRemoteName = constants[ind + 1]
+        end
+    end)
+
+    S.bwLoaded = (S.bwAttackRemote ~= nil)
+    if S.bwLoaded then
+        print("[SAB Killaura] Bedwars internals loaded — attack remote found")
+    else
+        warn("[SAB Killaura] Could not find attack remote — killaura will use fallback")
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- KILLAURA ENGINE (ported from 6872274481.lua — Bedwars native)
 --------------------------------------------------------------------------------
 
---[[ 
-    Sort methods — determines target priority ordering.
-    Mirrors the original: Damage, Health, Distance, Angle, Threat.
-    Some methods (Threat, Kit) require game-specific metadata not available in
-    a generic context so they fall back to Distance.
-]]
+--- Sort methods (mirrors original sortmethods table)
 local kaSortMethods = {
     Distance = function(a, b)
-        local root = getRoot()
-        if not root then return false end
-        return (a.rootPart.Position - root.Position).Magnitude < (b.rootPart.Position - root.Position).Magnitude
+        return a.distance < b.distance
     end,
     Health = function(a, b)
-        return (a.health or 999) < (b.health or 999)
+        return a.health < b.health
     end,
     Angle = function(a, b)
-        local root = getRoot()
-        if not root then return false end
-        local selfPos = root.Position
-        local lookDir = root.CFrame.LookVector * Vector3.new(1, 0, 1)
-        local angA = math.acos(math.clamp(lookDir:Dot(((a.rootPart.Position - selfPos) * Vector3.new(1, 0, 1)).Unit), -1, 1))
-        local angB = math.acos(math.clamp(lookDir:Dot(((b.rootPart.Position - selfPos) * Vector3.new(1, 0, 1)).Unit), -1, 1))
-        return angA < angB
+        return (a.angle or 999) < (b.angle or 999)
     end,
     Damage = function(a, b)
-        -- Prefer targets that were damaged most recently (via attribute if available)
-        local tA = 0; pcall(function() tA = a.character:GetAttribute("LastDamageTakenTime") or 0 end)
-        local tB = 0; pcall(function() tB = b.character:GetAttribute("LastDamageTakenTime") or 0 end)
+        local tA = 0; pcall(function() tA = a.character:GetAttribute('LastDamageTakenTime') or 0 end)
+        local tB = 0; pcall(function() tB = b.character:GetAttribute('LastDamageTakenTime') or 0 end)
         return tA < tB
     end,
 }
 
---- Gather all valid enemy entities within range.
---- Returns a list of {character, rootPart, health, humanoid, player}
-local function kaGetEntities(range, maxTargets, sortMethod, maxAngle, wallcheck, wantPlayers, wantNPCs)
+--- Get all enemy entities in range (mirrors entitylib.AllPosition)
+local function kaGetEntities()
     local root = getRoot(); if not root then return {} end
     local selfPos = root.Position
     local lookDir = root.CFrame.LookVector * Vector3.new(1, 0, 1)
     local results = {}
 
+    -- Scan all player characters
     for _, plr in ipairs(Players:GetPlayers()) do
-        if wantPlayers and plr ~= LocalPlayer and plr.Character then
+        if S.kaTargetPlayers and plr ~= LocalPlayer and plr.Character then
             local char = plr.Character
-            local hum = char:FindFirstChildOfClass("Humanoid")
             local rp = char:FindFirstChild("HumanoidRootPart")
-            if hum and rp and hum.Health > 0 then
+            local health = char:GetAttribute("Health") or 0
+            local maxHealth = char:GetAttribute("MaxHealth") or 100
+
+            -- Team check (mirrors: lplr:GetAttribute('Team') ~= plr:GetAttribute('Team'))
+            local myTeam = LocalPlayer:GetAttribute("Team")
+            local theirTeam = plr:GetAttribute("Team")
+            local sameTeam = (myTeam and theirTeam and myTeam == theirTeam)
+
+            if rp and health > 0 and not sameTeam then
                 local delta = rp.Position - selfPos
                 local dist = delta.Magnitude
 
-                if dist <= range then
-                    -- Angle check
-                    local flatDelta = (delta * Vector3.new(1, 0, 1))
+                if dist <= S.kaSwingRange then
+                    local flatDelta = delta * Vector3.new(1, 0, 1)
+                    local angle = 0
                     if flatDelta.Magnitude > 0 then
-                        local angle = math.acos(math.clamp(lookDir:Dot(flatDelta.Unit), -1, 1))
-                        if angle <= (math.rad(maxAngle) / 2) then
-                            -- Wallcheck (raycast between self and target)
-                            local blocked = false
-                            if wallcheck then
-                                local ray = Workspace:Raycast(selfPos, delta.Unit * dist, RaycastParams.new())
-                                if ray and ray.Instance and not ray.Instance:IsDescendantOf(char) and not ray.Instance:IsDescendantOf(LocalPlayer.Character) then
-                                    blocked = true
-                                end
-                            end
+                        angle = math.acos(math.clamp(lookDir:Dot(flatDelta.Unit), -1, 1))
+                    end
 
-                            if not blocked then
-                                table.insert(results, {
-                                    character = char,
-                                    rootPart = rp,
-                                    humanoid = hum,
-                                    health = hum.Health,
-                                    player = plr,
-                                    distance = dist,
-                                })
-                            end
-                        end
+                    if angle <= (math.rad(S.kaMaxAngle) / 2) then
+                        table.insert(results, {
+                            character = char,
+                            rootPart = rp,
+                            primaryPart = char.PrimaryPart or rp,
+                            health = health,
+                            maxHealth = maxHealth,
+                            player = plr,
+                            distance = dist,
+                            angle = angle,
+                        })
                     end
                 end
             end
         end
     end
 
-    -- NPC support: scan workspace for non-player humanoid models
-    if wantNPCs then
-        for _, child in ipairs(Workspace:GetDescendants()) do
-            if child:IsA("Humanoid") and child.Health > 0 then
-                local char = child.Parent
-                if char and char:IsA("Model") and not Players:GetPlayerFromCharacter(char) and char ~= LocalPlayer.Character then
-                    local rp = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
-                    if rp then
-                        local delta = rp.Position - selfPos
-                        local dist = delta.Magnitude
-                        if dist <= range then
-                            local flatDelta = (delta * Vector3.new(1, 0, 1))
-                            if flatDelta.Magnitude > 0 then
-                                local angle = math.acos(math.clamp(lookDir:Dot(flatDelta.Unit), -1, 1))
-                                if angle <= (math.rad(maxAngle) / 2) then
-                                    local blocked = false
-                                    if wallcheck then
-                                        local ray = Workspace:Raycast(selfPos, delta.Unit * dist, RaycastParams.new())
-                                        if ray and ray.Instance and not ray.Instance:IsDescendantOf(char) and not ray.Instance:IsDescendantOf(LocalPlayer.Character) then
-                                            blocked = true
-                                        end
-                                    end
-                                    if not blocked then
-                                        table.insert(results, {
-                                            character = char,
-                                            rootPart = rp,
-                                            humanoid = child,
-                                            health = child.Health,
-                                            player = nil,
-                                            distance = dist,
-                                        })
-                                    end
-                                end
-                            end
+    -- NPC scan (mirrors NPCs = Targets.NPCs.Enabled) — tagged entities
+    if S.kaTargetNPCs then
+        local collectionService = game:GetService("CollectionService")
+        for _, char in ipairs(collectionService:GetTagged("entity")) do
+            if char:IsA("Model") and not Players:GetPlayerFromCharacter(char) then
+                local rp = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+                local health = char:GetAttribute("Health") or 0
+                local myTeam = LocalPlayer:GetAttribute("Team")
+                local theirTeam = char:GetAttribute("Team")
+                local sameTeam = (myTeam and theirTeam and myTeam == theirTeam)
+
+                if rp and health > 0 and not sameTeam then
+                    local delta = rp.Position - selfPos
+                    local dist = delta.Magnitude
+                    if dist <= S.kaSwingRange then
+                        local flatDelta = delta * Vector3.new(1, 0, 1)
+                        local angle = 0
+                        if flatDelta.Magnitude > 0 then
+                            angle = math.acos(math.clamp(lookDir:Dot(flatDelta.Unit), -1, 1))
+                        end
+                        if angle <= (math.rad(S.kaMaxAngle) / 2) then
+                            table.insert(results, {
+                                character = char,
+                                rootPart = rp,
+                                primaryPart = char.PrimaryPart or rp,
+                                health = health,
+                                player = nil,
+                                distance = dist,
+                                angle = angle,
+                            })
                         end
                     end
                 end
@@ -1244,112 +1336,138 @@ local function kaGetEntities(range, maxTargets, sortMethod, maxAngle, wallcheck,
     end
 
     -- Sort
-    local sortFn = kaSortMethods[sortMethod] or kaSortMethods.Distance
+    local sortFn = kaSortMethods[S.kaSortMode] or kaSortMethods.Distance
     table.sort(results, function(a, b)
         local ok, res = pcall(sortFn, a, b)
         return ok and res or false
     end)
 
-    -- Limit
-    if maxTargets and #results > maxTargets then
+    -- Limit to max targets
+    if #results > S.kaMaxTargets then
         local trimmed = {}
-        for i = 1, maxTargets do trimmed[i] = results[i] end
+        for i = 1, S.kaMaxTargets do trimmed[i] = results[i] end
         return trimmed
     end
 
     return results
 end
 
---- Try to find and equip a sword tool from the player's backpack.
---- Mirrors the original switchItem logic.
-local function kaFindSword()
-    local char = LocalPlayer.Character; if not char then return nil, nil end
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    local bestTool, bestDamage = nil, 0
-
-    -- Check character equipped tools
-    for _, child in ipairs(char:GetChildren()) do
-        if child:IsA("Tool") then
-            local nm = child.Name:lower()
-            if nm:find("sword") or nm:find("blade") or nm:find("knife") or nm:find("weapon") or nm:find("katana") or nm:find("axe") then
-                return child, true -- already equipped
-            end
+--- switchItem: equip a weapon tool via the Bedwars EquipItem remote (mirrors original)
+local function kaSwitchItem(tool)
+    if not tool or not tool.Parent then return end
+    local char = LocalPlayer.Character; if not char then return end
+    local check = char:FindFirstChild("HandInvItem")
+    if check and check:IsA("ObjectValue") and check.Value ~= tool then
+        if S.bwClient and S.bwEquipRemoteName then
+            pcall(function()
+                S.bwClient:Get(S.bwEquipRemoteName):CallServerAsync({hand = tool})
+            end)
+            check.Value = tool
+        else
+            -- Fallback: standard humanoid equip
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and tool:IsA("Tool") then hum:EquipTool(tool) end
         end
     end
+end
 
-    -- Check backpack
-    if backpack then
-        for _, child in ipairs(backpack:GetChildren()) do
-            if child:IsA("Tool") then
-                local nm = child.Name:lower()
-                if nm:find("sword") or nm:find("blade") or nm:find("knife") or nm:find("weapon") or nm:find("katana") or nm:find("axe") then
-                    local dmg = 0
-                    pcall(function() dmg = child:GetAttribute("Damage") or 0 end)
-                    if dmg >= bestDamage then
-                        bestTool = child; bestDamage = dmg
-                    end
+--- Find the best sword in inventory (mirrors getSword — checks HandInvItem + backpack)
+local function kaGetSword()
+    local char = LocalPlayer.Character; if not char then return nil, nil end
+    local bestTool, bestDamage, bestToolType = nil, 0, nil
+
+    -- Check all tools in character (equipped items in Bedwars are Tool instances)
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Tool") and S.bwItemMeta then
+            local meta = S.bwItemMeta[child.Name]
+            if meta and meta.sword then
+                local dmg = meta.sword.damage or 0
+                if dmg > bestDamage then
+                    bestTool, bestDamage, bestToolType = child, dmg, "sword"
                 end
             end
-        end
-    end
-
-    return bestTool, false
-end
-
---- Equip a tool by parenting it to the character (standard Roblox equip).
-local function kaEquipTool(tool)
-    if not tool then return end
-    local char = LocalPlayer.Character
-    if char and tool.Parent ~= char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then hum:EquipTool(tool) end
-    end
-end
-
---- Swing / attack a single target. Uses ClickDetector, remote, or Tool:Activate().
---- Mirrors the original AttackRemote:FireServer pattern with fallbacks.
-local function kaAttackTarget(target, tool)
-    if not target or not target.rootPart then return end
-
-    -- Method 1: Fire any "Attack" remote if found (game-specific)
-    local attackRemote = nil
-    pcall(function()
-        for _, v in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
-            if (v:IsA("RemoteEvent") or v:IsA("RemoteFunction")) and v.Name:lower():find("attack") then
-                attackRemote = v; break
+        elseif child:IsA("Tool") then
+            local nm = child.Name:lower()
+            if nm:find("sword") or nm:find("blade") or nm:find("katana") or nm:find("axe") then
+                bestTool = child
             end
         end
-    end)
+    end
 
-    local selfPos = getRoot() and getRoot().Position or Vector3.zero
-    local dir = CFrame.lookAt(selfPos, target.rootPart.Position).LookVector
+    return bestTool, bestToolType
+end
 
-    if attackRemote and attackRemote:IsA("RemoteEvent") then
+--- Get currently held item info (mirrors store.hand)
+local function kaGetHandInfo()
+    local char = LocalPlayer.Character; if not char then return nil end
+    local handItem = char:FindFirstChild("HandInvItem")
+    if handItem and handItem:IsA("ObjectValue") and handItem.Value then
+        local tool = handItem.Value
+        local meta = S.bwItemMeta and S.bwItemMeta[tool.Name] or nil
+        local toolType = nil
+        if meta then
+            if meta.sword then toolType = "sword"
+            elseif meta.breakBlock then toolType = "pickaxe"
+            elseif meta.projectileSource then toolType = "bow"
+            end
+        end
+        return {tool = tool, meta = meta, toolType = toolType}
+    end
+    return nil
+end
+
+--- Fire the attack remote (mirrors AttackRemote:FireServer exactly)
+local function kaFireAttack(target, weaponTool, selfPos)
+    if not target or not target.rootPart then return end
+
+    local actualRoot = target.primaryPart or target.rootPart
+    local dir = CFrame.lookAt(selfPos, actualRoot.Position).LookVector
+    local dist = (actualRoot.Position - selfPos).Magnitude
+    local pos = selfPos + dir * math.max(dist - 14.399, 0)
+
+    -- Method 1: Bedwars native remote (exact payload from original)
+    if S.bwAttackRemote then
         pcall(function()
-            attackRemote:FireServer({
-                weapon = tool,
+            S.bwAttackRemote:FireServer({
+                weapon = weaponTool,
                 chargedAttack = {chargeRatio = 0},
                 lastSwingServerTimeDelta = 0.5,
                 entityInstance = target.character,
                 validate = {
                     raycast = {
-                        cameraPosition = {value = selfPos},
-                        cursorDirection = {value = dir},
+                        cameraPosition = {value = pos},
+                        cursorDirection = {value = dir}
                     },
-                    targetPosition = {value = target.rootPart.Position},
-                    selfPosition = {value = selfPos},
-                },
+                    targetPosition = {value = actualRoot.Position},
+                    selfPosition = {value = pos}
+                }
             })
         end)
     end
 
-    -- Method 2: Activate the tool (generic Roblox sword behavior)
-    if tool and tool:IsA("Tool") then
-        pcall(function() tool:Activate() end)
+    -- Method 2: Fallback — Tool:Activate() for non-Bedwars or if remote failed
+    if not S.bwAttackRemote and weaponTool and weaponTool:IsA("Tool") then
+        pcall(function() weaponTool:Activate() end)
+    end
+
+    -- Update lastAttack on SwordController (prevents double-swing detection)
+    if S.bwSwordController then
+        pcall(function()
+            S.bwSwordController.lastAttack = Workspace:GetServerTimeNow()
+        end)
     end
 end
 
---- Face toward a target (mirrors Face target toggle)
+--- Play sword swing effect (mirrors bedwars.SwordController:playSwordEffect)
+local function kaPlaySwingEffect(meta)
+    if S.bwSwordController and meta then
+        pcall(function()
+            S.bwSwordController:playSwordEffect(meta, false)
+        end)
+    end
+end
+
+--- Face target (mirrors Face.Enabled)
 local function kaFaceTarget(target)
     local root = getRoot(); if not root or not target or not target.rootPart then return end
     local tPos = target.rootPart.Position * Vector3.new(1, 0, 1)
@@ -1359,174 +1477,162 @@ local function kaFaceTarget(target)
     )
 end
 
---- Show target boxes (mirrors the BoxHandleAdornment logic)
+--- Target box visuals (mirrors BoxHandleAdornment system)
 local function kaUpdateBoxes(attacked)
-    -- Create boxes on demand
     while #S.kaBoxes < 10 do
         local box = Instance.new("BoxHandleAdornment")
-        box.Adornee = nil
-        box.AlwaysOnTop = true
-        box.Size = Vector3.new(3, 5, 3)
-        box.CFrame = CFrame.new(0, -0.5, 0)
-        box.ZIndex = 0
-        box.Color3 = C.RED
-        box.Transparency = 0.5
+        box.Adornee = nil; box.AlwaysOnTop = true
+        box.Size = Vector3.new(3, 5, 3); box.CFrame = CFrame.new(0, -0.5, 0)
+        box.ZIndex = 0; box.Transparency = 0.5
         box.Parent = Gui
         table.insert(S.kaBoxes, box)
     end
-
     for i, box in ipairs(S.kaBoxes) do
         if attacked[i] then
             box.Adornee = attacked[i].rootPart
-            -- Color based on whether in attack range or only swing range
-            if attacked[i].distance and attacked[i].distance <= S.kaAttackRange then
-                box.Color3 = C.RED
-                box.Transparency = 0.4
+            if attacked[i].distance <= S.kaAttackRange then
+                box.Color3 = C.RED; box.Transparency = 0.4
             else
-                box.Color3 = C.CYAN
-                box.Transparency = 0.6
+                box.Color3 = C.CYAN; box.Transparency = 0.6
             end
         else
             box.Adornee = nil
         end
     end
 end
-
 local function kaClearBoxes()
-    for _, box in ipairs(S.kaBoxes) do
-        box.Adornee = nil
-        box:Destroy()
-    end
+    for _, box in ipairs(S.kaBoxes) do box.Adornee = nil; box:Destroy() end
     S.kaBoxes = {}
 end
 
---- Main killaura loop — runs as a coroutine when enabled.
---- Mirrors the original repeat/until Killaura.Enabled pattern exactly.
+--- Main killaura loop (mirrors the exact repeat/until Killaura.Enabled loop)
 local function kaMainLoop()
+    local swingCooldown = 0
+    local animDelay = 0
+
     while S.killaura do
         local attacked = {}
         S.kaAttacking = false
         S.kaTarget = nil
 
-        -- Pre-checks (mirrors getAttackData)
+        ---- getAttackData() checks ----
         local canAttack = true
 
+        -- Mouse check (mirrors Mouse.Enabled)
         if S.kaRequireMouse then
             if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
                 canAttack = false
             end
         end
 
-        if S.kaGuiCheck then
-            -- Skip if any ScreenGui (other than ours) is actively capturing input
-            -- Mirrors: bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN)
-            -- In a generic context we check if a TextBox is focused
-            if UserInputService:GetFocusedTextBox() then
+        -- GUI check (mirrors GUI.Enabled + bedwars.AppController:isLayerOpen)
+        if S.kaGuiCheck and UserInputService:GetFocusedTextBox() then
+            canAttack = false
+        end
+
+        -- Get weapon
+        local weaponTool, weaponMeta = nil, nil
+
+        if S.kaLimitToSword then
+            -- Only attack when holding a sword (mirrors Limit.Enabled + store.hand.toolType == 'sword')
+            local hand = kaGetHandInfo()
+            if hand and hand.toolType == "sword" then
+                weaponTool = hand.tool
+                weaponMeta = hand.meta
+            else
+                canAttack = false
+            end
+        else
+            -- Auto-find best sword
+            local sword = kaGetSword()
+            if sword then
+                weaponTool = sword
+                weaponMeta = S.bwItemMeta and S.bwItemMeta[sword.Name] or nil
+            else
                 canAttack = false
             end
         end
 
-        -- Limit to sword: only attack when holding a sword-like tool
-        local currentTool = nil
-        if S.kaLimitToSword then
-            local char = LocalPlayer.Character
-            if char then
-                for _, child in ipairs(char:GetChildren()) do
-                    if child:IsA("Tool") then
-                        local nm = child.Name:lower()
-                        if nm:find("sword") or nm:find("blade") or nm:find("knife") or nm:find("weapon") or nm:find("katana") or nm:find("axe") then
-                            currentTool = child
-                        end
-                    end
-                end
-            end
-            if not currentTool then canAttack = false end
-        else
-            -- Auto-find and equip sword
-            local sword, isEquipped = kaFindSword()
-            if sword then
-                if not isEquipped then kaEquipTool(sword) end
-                currentTool = sword
-            end
-        end
-
-        if canAttack and getRoot() then
-            -- Get targets (mirrors entitylib.AllPosition call)
-            local targets = kaGetEntities(
-                S.kaSwingRange,
-                S.kaMaxTargets,
-                S.kaSortMode or "Distance",
-                S.kaMaxAngle,
-                false, -- wallcheck (toggle-able in original via Targets.Walls)
-                S.kaTargetPlayers,
-                S.kaTargetNPCs
-            )
+        if canAttack and weaponTool and getRoot() then
+            ---- entitylib.AllPosition ----
+            local targets = kaGetEntities()
 
             if #targets > 0 then
-                local swingCooldown = 0
+                -- switchItem (mirrors: switchItem(sword.tool, 0))
+                kaSwitchItem(weaponTool)
+
                 local selfPos = getRoot().Position
+                local localFacing = getRoot().CFrame.LookVector * Vector3.new(1, 0, 1)
 
                 for _, target in ipairs(targets) do
                     local delta = target.rootPart.Position - selfPos
-                    local dist = delta.Magnitude
 
                     table.insert(attacked, target)
 
+                    -- First target triggers swing animation
                     if not S.kaAttacking then
                         S.kaAttacking = true
                         S.kaTarget = target
 
-                        -- Swing visual (mirrors playSwordEffect)
-                        if not S.kaNoSwing and currentTool and currentTool:IsA("Tool") then
-                            pcall(function() currentTool:Activate() end)
+                        -- Swing visual (mirrors: playSwordEffect + AnimDelay check)
+                        if not S.kaNoSwing and animDelay < tick() then
+                            local chargeTime = S.kaChargeTime
+                            if weaponMeta and weaponMeta.sword then
+                                chargeTime = weaponMeta.sword.respectAttackSpeedForEffects
+                                    and weaponMeta.sword.attackSpeed
+                                    or math.max(S.kaChargeTime, 0.11)
+                            end
+                            animDelay = tick() + chargeTime
+                            kaPlaySwingEffect(weaponMeta)
                         end
                     end
 
-                    -- Only fire the actual attack remote if within attack range
-                    -- Mirrors: if delta.Magnitude > AttackRange.Value then continue end
-                    if dist <= S.kaAttackRange then
-                        if (tick() - swingCooldown) >= math.max(S.kaChargeTime, 0.02) then
-                            swingCooldown = tick()
-                            kaAttackTarget(target, currentTool)
-                        end
+                    -- Only fire attack if within attack range (mirrors the distance checks)
+                    if target.distance > S.kaAttackRange then continue end
+
+                    -- Charge time cooldown (mirrors: delta.Magnitude < 14.4 and swingCooldown check)
+                    if target.distance < 14.4 and (tick() - swingCooldown) < math.max(S.kaChargeTime, 0.02) then
+                        continue
+                    end
+
+                    -- FIRE THE ATTACK (mirrors AttackRemote:FireServer)
+                    swingCooldown = tick()
+                    kaFireAttack(target, weaponTool, selfPos)
+
+                    -- Reset anim delay on close hits (mirrors: if delta.Magnitude < 14.4 and ChargeTime > 0.11)
+                    if target.distance < 14.4 and S.kaChargeTime > 0.11 then
+                        animDelay = tick()
                     end
                 end
             end
         end
 
-        -- Update target boxes if showing
-        if S.kaShowTarget then
-            kaUpdateBoxes(attacked)
-        end
+        -- Update visuals
+        if S.kaShowTarget then kaUpdateBoxes(attacked) end
 
-        -- Face target (mirrors Face.Enabled check)
+        -- Face target (mirrors Face.Enabled)
         if S.kaFaceTarget and attacked[1] then
             kaFaceTarget(attacked[1])
         end
 
-        -- Wait at the configured update rate (mirrors task.wait(1 / UpdateRate.Value))
+        -- Rate limiter (mirrors: task.wait(1 / UpdateRate.Value))
         task.wait(1 / math.max(S.kaUpdateRate, 1))
     end
 
-    -- Cleanup on disable (mirrors the else branch)
+    -- Cleanup on disable
     S.kaTarget = nil
     S.kaAttacking = false
     if S.kaShowTarget then kaClearBoxes() end
 end
 
---- Start / stop killaura
 local function kaStart()
     if S.kaConn["loop"] then return end
     S.killaura = true
-    S.kaConn["loop"] = task.spawn(function()
-        kaMainLoop()
-    end)
+    S.kaConn["loop"] = task.spawn(function() kaMainLoop() end)
 end
-
 local function kaStop()
     S.killaura = false
-    S.kaTarget = nil
-    S.kaAttacking = false
+    S.kaTarget = nil; S.kaAttacking = false
     if S.kaConn["loop"] then
         pcall(function() task.cancel(S.kaConn["loop"]) end)
         S.kaConn["loop"] = nil
@@ -1535,23 +1641,21 @@ local function kaStop()
 end
 
 --------------------------------------------------------------------------------
--- ██ COMBAT TAB ██  (Killaura UI — mirrors every toggle/slider from original)
+-- ██ COMBAT TAB ██  (mirrors every killaura UI element from 6872274481.lua)
 --------------------------------------------------------------------------------
 mkSection("Combat", "Killaura")
 local _, _, forceKillaura = mkToggle("Combat", "⚔️ Killaura", false, function(v)
     if v then kaStart() else kaStop() end
 end)
-S.kaSortMode = "Distance"
 
 mkSection("Combat", "Range & Timing")
 mkSlider("Combat", "Swing Range", 1, 18, 18, function(v) S.kaSwingRange = v end)
 mkSlider("Combat", "Attack Range", 1, 18, 18, function(v) S.kaAttackRange = v end)
 
--- ChargeTime needs decimal support; we use min=0 max=50 mapped to 0..0.50
-local _, _, forceChargeSlider
+-- Swing Time slider with decimal precision (mirrors ChargeTime 0..0.50)
 do
     local p = S.tabFrames["Combat"]; if p then
-        local val = 42 -- represents 0.42
+        local val = 42
         local row = Instance.new("Frame", p); row.Name = "Slider_SwingTime"; row.Size = UDim2.new(1,0,0,46)
         row.BackgroundColor3 = C.BG2; row.BackgroundTransparency = 0.4; row.BorderSizePixel = 0; row.LayoutOrder = nOrd("Combat")
         Instance.new("UICorner", row).CornerRadius = UDim.new(0,6)
@@ -1567,7 +1671,7 @@ do
         sk.BackgroundColor3 = Color3.new(1,1,1); sk.BorderSizePixel = 0; sk.ZIndex = 2; Instance.new("UICorner", sk).CornerRadius = UDim.new(1,0)
         Instance.new("UIStroke", sk).Color = C.ACCENT; sk:FindFirstChildOfClass("UIStroke").Thickness = 2
         local dragging = false
-        local function upd(p2) p2 = math.clamp(p2,0,1); val = math.floor(p2 * 50); S.kaChargeTime = val / 100; vl2.Text = string.format("%.2f", val/100); fill.Size = UDim2.new(p2,0,1,0); sk.Position = UDim2.new(p2,-6,0.5,-6) end
+        local function upd(p2) p2 = math.clamp(p2,0,1); val = math.floor(p2*50); S.kaChargeTime = val/100; vl2.Text = string.format("%.2f",val/100); fill.Size = UDim2.new(p2,0,1,0); sk.Position = UDim2.new(p2,-6,0.5,-6) end
         local sb = Instance.new("TextButton", trk); sb.Size = UDim2.new(1,0,0,20); sb.Position = UDim2.new(0,0,0,-8); sb.BackgroundTransparency = 1; sb.Text = ""
         sb.MouseButton1Down:Connect(function() dragging = true end)
         UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
@@ -1581,9 +1685,8 @@ mkSlider("Combat", "Update Rate (hz)", 1, 120, 60, function(v) S.kaUpdateRate = 
 mkSlider("Combat", "Max Targets", 1, 5, 5, function(v) S.kaMaxTargets = v end)
 
 mkSection("Combat", "Target Mode")
--- Dropdown-like using action buttons to select sort mode
 for _, mode in ipairs({"Distance", "Health", "Angle", "Damage"}) do
-    mkActionBtn("Combat", "🎯  Sort: " .. mode, (S.kaSortMode == mode) and C.ACCENT or C.BG4, function()
+    mkActionBtn("Combat", "🎯  Sort: " .. mode, C.BG4, function()
         S.kaSortMode = mode
         pushNotification("Target Mode", "Set to " .. mode, C.ACCENT, 2)
     end)
@@ -1594,7 +1697,7 @@ mkToggle("Combat", "🖱️ Require Mouse Down", false, function(v) S.kaRequireM
 mkToggle("Combat", "🚫 No Swing Animation", false, function(v) S.kaNoSwing = v end)
 mkToggle("Combat", "📋 GUI Check", false, function(v) S.kaGuiCheck = v end)
 mkToggle("Combat", "🎯 Face Target", false, function(v) S.kaFaceTarget = v end)
-mkToggle("Combat", "🗡️ Limit to Sword", false, function(v) S.kaLimitToSword = v end)
+mkToggle("Combat", "🗡️ Limit to Sword Only", false, function(v) S.kaLimitToSword = v end)
 
 mkSection("Combat", "Targets")
 mkToggle("Combat", "👤 Target Players", true, function(v) S.kaTargetPlayers = v end)
@@ -1606,7 +1709,9 @@ mkToggle("Combat", "📦 Show Target Boxes", false, function(v)
     if not v then kaClearBoxes() end
 end)
 
-
+--------------------------------------------------------------------------------
+-- MAIN LOOP
+--------------------------------------------------------------------------------
 local tick2 = 0
 S.conn["main"] = RunService.RenderStepped:Connect(function(dt)
     tick2 += 1
