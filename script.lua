@@ -1763,7 +1763,7 @@ TriggerIndicator.AnchorPoint = Vector2.new(0.5, 0.5)
 TriggerIndicator.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 TriggerIndicator.BackgroundTransparency = 0.5
 TriggerIndicator.Text = "TB: READY"
-TriggerIndicator.TextColor3 = C.accent
+TriggerIndicator.TextColor3 = C.cyber_cyan
 TriggerIndicator.TextSize = 9
 TriggerIndicator.Font = Enum.Font.GothamBold
 TriggerIndicator.Visible = false
@@ -1888,7 +1888,7 @@ local function executeTrigger()
 			spawn(function()
 				wait(0.3)
 				TriggerIndicator.Text = "TB: READY"
-				TriggerIndicator.TextColor3 = C.accent
+				TriggerIndicator.TextColor3 = C.cyber_cyan
 			end)
 		end
 	else
@@ -1900,7 +1900,7 @@ local function executeTrigger()
 			spawn(function()
 				wait(0.15)
 				TriggerIndicator.Text = "TB: READY"
-				TriggerIndicator.TextColor3 = C.accent
+				TriggerIndicator.TextColor3 = C.cyber_cyan
 			end)
 		end
 	end
@@ -2006,7 +2006,7 @@ fovCircle.ZIndex = 40
 fovCircle.Parent = ScreenGui
 Instance.new("UICorner", fovCircle).CornerRadius = UDim.new(1, 0)
 local fovStroke = Instance.new("UIStroke", fovCircle)
-fovStroke.Color = C.accent
+fovStroke.Color = C.cyber_cyan
 fovStroke.Thickness = 1
 
 -- ========================
@@ -2131,7 +2131,7 @@ KillCounterLbl.AnchorPoint = Vector2.new(0.5, 0)
 KillCounterLbl.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 KillCounterLbl.BackgroundTransparency = 0.5
 KillCounterLbl.Text = "✦ 0 Kills"
-KillCounterLbl.TextColor3 = C.accent
+KillCounterLbl.TextColor3 = C.cyber_cyan
 KillCounterLbl.TextSize = 14
 KillCounterLbl.Font = Enum.Font.GothamBold
 KillCounterLbl.Parent = HUDGui
@@ -2146,7 +2146,7 @@ PerfHUD.Position = UDim2.new(0, 10, 1, -32)
 PerfHUD.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 PerfHUD.BackgroundTransparency = 0.6
 PerfHUD.Text = "FPS: -- | Ping: --"
-PerfHUD.TextColor3 = C.accent
+PerfHUD.TextColor3 = C.cyber_cyan
 PerfHUD.TextSize = 10
 PerfHUD.Font = Enum.Font.GothamMedium
 PerfHUD.TextXAlignment = Enum.TextXAlignment.Center
@@ -2437,7 +2437,7 @@ Instance.new("UICorner", TPCooldownBg).CornerRadius = UDim.new(1, 0)
 
 local TPCooldownFill = Instance.new("Frame")
 TPCooldownFill.Size = UDim2.new(1, 0, 1, 0)
-TPCooldownFill.BackgroundColor3 = C.cyan
+TPCooldownFill.BackgroundColor3 = C.cyber_cyan
 TPCooldownFill.BorderSizePixel = 0
 TPCooldownFill.Parent = TPCooldownBg
 Instance.new("UICorner", TPCooldownFill).CornerRadius = UDim.new(1, 0)
@@ -2448,7 +2448,7 @@ TPLabel.Position = UDim2.new(0.5, 0, 0, 52)
 TPLabel.AnchorPoint = Vector2.new(0.5, 0)
 TPLabel.BackgroundTransparency = 1
 TPLabel.Text = "TP READY"
-TPLabel.TextColor3 = C.cyan
+TPLabel.TextColor3 = C.cyber_cyan
 TPLabel.TextSize = 9
 TPLabel.Font = Enum.Font.GothamBold
 TPLabel.Visible = false
@@ -2489,7 +2489,7 @@ local function showTeleportEffect(fromPos, toPos)
 		part.CanCollide = false
 		part.Shape = Enum.PartType.Ball
 		part.Material = Enum.Material.Neon
-		part.Color = C.cyan
+		part.Color = C.cyber_cyan
 		part.Transparency = 0.3
 		part.Parent = workspace
 
@@ -2511,7 +2511,7 @@ local function showTeleportEffect(fromPos, toPos)
 		part2.CanCollide = false
 		part2.Shape = Enum.PartType.Ball
 		part2.Material = Enum.Material.Neon
-		part2.Color = C.accent
+		part2.Color = C.cyber_cyan
 		part2.Transparency = 0.3
 		part2.Parent = workspace
 
@@ -2527,7 +2527,7 @@ local function showTeleportEffect(fromPos, toPos)
 	spawn(function()
 		local flash = Instance.new("Frame")
 		flash.Size = UDim2.new(1, 0, 1, 0)
-		flash.BackgroundColor3 = C.cyan
+		flash.BackgroundColor3 = C.cyber_cyan
 		flash.BackgroundTransparency = 0.7
 		flash.BorderSizePixel = 0
 		flash.ZIndex = 1000
@@ -2552,7 +2552,7 @@ local function teleportBehindEnemy()
 			TPLabel.TextColor3 = C.red
 			wait(1)
 			TPLabel.Text = "TP READY"
-			TPLabel.TextColor3 = C.cyan
+			TPLabel.TextColor3 = C.cyber_cyan
 		end)
 		return
 	end
@@ -2588,7 +2588,7 @@ local function teleportBehindEnemy()
 		notif.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 		notif.BackgroundTransparency = 0.4
 		notif.Text = "⚡ TELEPORTED BEHIND " .. string.upper(target.character.Name)
-		notif.TextColor3 = C.cyan
+		notif.TextColor3 = C.cyber_cyan
 		notif.TextSize = 11
 		notif.Font = Enum.Font.GothamBold
 		notif.TextScaled = false
@@ -2617,17 +2617,17 @@ local function teleportBehindEnemy()
 			local pct = 1 - (elapsed / cd)
 			TPCooldownFill.Size = UDim2.new(pct, 0, 1, 0)
 			TPCooldownFill.BackgroundColor3 = Color3.fromRGB(
-				255 * pct + C.cyan.R * 255 * (1 - pct),
-				60 * pct + C.cyan.G * 255 * (1 - pct),
-				60 * pct + C.cyan.B * 255 * (1 - pct)
+				255 * pct + C.cyber_cyan.R * 255 * (1 - pct),
+				60 * pct + C.cyber_cyan.G * 255 * (1 - pct),
+				60 * pct + C.cyber_cyan.B * 255 * (1 - pct)
 			)
 			wait(0.03)
 		end
 		tpCooldownActive = false
 		TPCooldownFill.Size = UDim2.new(1, 0, 1, 0)
-		TPCooldownFill.BackgroundColor3 = C.cyan
+		TPCooldownFill.BackgroundColor3 = C.cyber_cyan
 		TPLabel.Text = "TP READY"
-		TPLabel.TextColor3 = C.cyan
+		TPLabel.TextColor3 = C.cyber_cyan
 
 		-- Flash ready
 		for i = 1, 3 do
