@@ -11,6 +11,7 @@ local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local StarterGui = game:GetService("StarterGui")
 local Stats = game:GetService("Stats")
+local HttpService = game:GetService("HttpService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
@@ -1547,6 +1548,433 @@ header(t7, "Ping", 8)
 toggle(t7, "Ping Display", S.PingDisplay, 9, function(v) S.PingDisplay = v end)
 toggle(t7, "High Ping Warning", S.Ping_HighWarning, 10, function(v) S.Ping_HighWarning = v end)
 slider(t7, "Warning Threshold (ms)", 50, 500, S.Ping_HighThreshold, 11, function(v) S.Ping_HighThreshold = v end)
+sep(t7, 12)
+
+-- ========================
+--  CONFIG SYSTEM
+-- ========================
+-- Uses plugin:SetSetting / GetSetting for studio, or Attribute storage on player for runtime
+-- Configs stored as JSON-encoded string in player attributes
+
+local CONFIG_PREFIX = "CyberToolkit_"
+local AUTOLOAD_KEY = CONFIG_PREFIX .. "Autoload"
+local CONFIG_LIST_KEY = CONFIG_PREFIX .. "ConfigList"
+
+-- Serialize settings (convert Color3 to tables)
+local function serializeSettings()
+	local data = {}
+	for key, val in pairs(S) do
+		if typeof(val) == "Color3" then
+			data[key] = {_type = "Color3", R = math.floor(val.R * 255), G = math.floor(val.G * 255), B = math.floor(val.B * 255)}
+		else
+			data[key] = val
+		end
+	end
+	return data
+end
+
+-- Deserialize settings (convert Color3 tables back)
+local function deserializeSettings(data)
+	for key, val in pairs(data) do
+		if type(val) == "table" and val._type == "Color3" then
+			S[key] = Color3.fromRGB(val.R, val.G, val.B)
+		elseif S[key] ~= nil then
+			S[key] = val
+		end
+	end
+end
+
+-- Save config to player attributes
+local function saveConfig(name)
+	local success, err = pcall(function()
+		local json = HttpService:JSONEncode(serializeSettings())
+		LocalPlayer:SetAttribute(CONFIG_PREFIX .. name, json)
+
+		-- Update config list
+		local listJson = LocalPlayer:GetAttribute(CONFIG_LIST_KEY) or "[]"
+		local list = HttpService:JSONDecode(listJson)
+		if not table.find(list, name) then
+			table.insert(list, name)
+		end
+		LocalPlayer:SetAttribute(CONFIG_LIST_KEY, HttpService:JSONEncode(list))
+	end)
+	return success, err
+end
+
+-- Load config from player attributes
+local function loadConfig(name)
+	local success, err = pcall(function()
+		local json = LocalPlayer:GetAttribute(CONFIG_PREFIX .. name)
+		if json then
+			local data = HttpService:JSONDecode(json)
+			deserializeSettings(data)
+		end
+	end)
+	return success, err
+end
+
+-- Delete config
+local function deleteConfig(name)
+	pcall(function()
+		LocalPlayer:SetAttribute(CONFIG_PREFIX .. name, nil)
+		local listJson = LocalPlayer:GetAttribute(CONFIG_LIST_KEY) or "[]"
+		local list = HttpService:JSONDecode(listJson)
+		local idx = table.find(list, name)
+		if idx then table.remove(list, idx) end
+		LocalPlayer:SetAttribute(CONFIG_LIST_KEY, HttpService:JSONEncode(list))
+	end)
+end
+
+-- Get config list
+local function getConfigList()
+	local list = {}
+	pcall(function()
+		local json = LocalPlayer:GetAttribute(CONFIG_LIST_KEY) or "[]"
+		list = HttpService:JSONDecode(json)
+	end)
+	return list
+end
+
+-- Set autoload config
+local function setAutoload(name)
+	pcall(function()
+		LocalPlayer:SetAttribute(AUTOLOAD_KEY, name)
+	end)
+end
+
+-- Get autoload config name
+local function getAutoload()
+	local name = ""
+	pcall(function()
+		name = LocalPlayer:GetAttribute(AUTOLOAD_KEY) or ""
+	end)
+	return name
+end
+
+-- Clear autoload
+local function clearAutoload()
+	pcall(function()
+		LocalPlayer:SetAttribute(AUTOLOAD_KEY, "")
+	end)
+end
+
+-- ========================
+--  CONFIG UI (in QOL tab)
+-- ========================
+header(t7, "Config System", 13)
+
+-- Config name input display
+local configNameHolder = {value = "Default"}
+
+local configNameRow = Instance.new("Frame")
+configNameRow.Size = UDim2.new(1, 0, 0, 30)
+configNameRow.BackgroundColor3 = C.card_glass
+configNameRow.BackgroundTransparency = 0.3
+configNameRow.BorderSizePixel = 0
+configNameRow.LayoutOrder = 14
+configNameRow.ZIndex = 53
+configNameRow.Parent = t7
+Instance.new("UICorner", configNameRow).CornerRadius = UDim.new(0, 7)
+Instance.new("UIStroke", configNameRow).Color = C.border
+configNameRow:FindFirstChildOfClass("UIStroke").Thickness = 1
+configNameRow:FindFirstChildOfClass("UIStroke").Transparency = 0.7
+local cnPad = Instance.new("UIPadding", configNameRow)
+cnPad.PaddingLeft = UDim.new(0, 10)
+cnPad.PaddingRight = UDim.new(0, 10)
+
+local configNameLbl = Instance.new("TextLabel")
+configNameLbl.Size = UDim2.new(0, 80, 1, 0)
+configNameLbl.BackgroundTransparency = 1
+configNameLbl.Text = "Config Name"
+configNameLbl.TextColor3 = C.text
+configNameLbl.TextSize = 10
+configNameLbl.Font = Enum.Font.GothamMedium
+configNameLbl.TextXAlignment = Enum.TextXAlignment.Left
+configNameLbl.ZIndex = 54
+configNameLbl.Parent = configNameRow
+
+local configNameBox = Instance.new("TextBox")
+configNameBox.Size = UDim2.new(0, 140, 0, 22)
+configNameBox.Position = UDim2.new(1, 0, 0.5, 0)
+configNameBox.AnchorPoint = Vector2.new(1, 0.5)
+configNameBox.BackgroundColor3 = C.slider_bg
+configNameBox.Text = "Default"
+configNameBox.PlaceholderText = "Config name..."
+configNameBox.TextColor3 = C.cyber_cyan
+configNameBox.PlaceholderColor3 = C.dim
+configNameBox.TextSize = 10
+configNameBox.Font = Enum.Font.GothamBold
+configNameBox.BorderSizePixel = 0
+configNameBox.ClearTextOnFocus = false
+configNameBox.ZIndex = 54
+configNameBox.Parent = configNameRow
+Instance.new("UICorner", configNameBox).CornerRadius = UDim.new(0, 5)
+local cStroke = Instance.new("UIStroke", configNameBox)
+cStroke.Color = C.cyber_cyan
+cStroke.Thickness = 1
+cStroke.Transparency = 0.7
+
+configNameBox.FocusLost:Connect(function()
+	configNameHolder.value = configNameBox.Text
+end)
+
+-- Action buttons
+local function configButton(parent, text, color, order, callback)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(0.48, 0, 0, 28)
+	btn.BackgroundColor3 = color
+	btn.BackgroundTransparency = 0.7
+	btn.Text = text
+	btn.TextColor3 = color
+	btn.TextSize = 10
+	btn.Font = Enum.Font.GothamBold
+	btn.BorderSizePixel = 0
+	btn.LayoutOrder = order
+	btn.ZIndex = 54
+	btn.Parent = parent
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+	local bStroke = Instance.new("UIStroke", btn)
+	bStroke.Color = color
+	bStroke.Thickness = 1
+	bStroke.Transparency = 0.4
+
+	btn.MouseEnter:Connect(function()
+		TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundTransparency = 0.4}):Play()
+	end)
+	btn.MouseLeave:Connect(function()
+		TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundTransparency = 0.7}):Play()
+	end)
+	btn.MouseButton1Click:Connect(callback)
+	return btn
+end
+
+-- Button row 1: Save / Load
+local btnRow1 = Instance.new("Frame")
+btnRow1.Size = UDim2.new(1, 0, 0, 28)
+btnRow1.BackgroundTransparency = 1
+btnRow1.LayoutOrder = 15
+btnRow1.ZIndex = 53
+btnRow1.Parent = t7
+local br1Layout = Instance.new("UIListLayout", btnRow1)
+br1Layout.FillDirection = Enum.FillDirection.Horizontal
+br1Layout.Padding = UDim.new(0.04, 0)
+
+configButton(btnRow1, "💾 SAVE CONFIG", C.cyber_cyan, 1, function()
+	local name = configNameHolder.value
+	if name == "" then
+		showToast("ERROR", "Enter a config name first", C.cyber_red, "✕")
+		return
+	end
+	local ok, err = saveConfig(name)
+	if ok then
+		showToast("SAVED", "Config '" .. name .. "' saved", C.cyber_cyan, "💾")
+	else
+		showToast("ERROR", "Failed to save: " .. tostring(err), C.cyber_red, "✕")
+	end
+end)
+
+configButton(btnRow1, "📂 LOAD CONFIG", C.cyber_green, 2, function()
+	local name = configNameHolder.value
+	if name == "" then
+		showToast("ERROR", "Enter a config name first", C.cyber_red, "✕")
+		return
+	end
+	local ok, err = loadConfig(name)
+	if ok then
+		showToast("LOADED", "Config '" .. name .. "' loaded", C.cyber_green, "📂")
+		updateStatusBar()
+	else
+		showToast("ERROR", "Failed to load: " .. tostring(err), C.cyber_red, "✕")
+	end
+end)
+
+-- Button row 2: Set Autoload / Delete
+local btnRow2 = Instance.new("Frame")
+btnRow2.Size = UDim2.new(1, 0, 0, 28)
+btnRow2.BackgroundTransparency = 1
+btnRow2.LayoutOrder = 16
+btnRow2.ZIndex = 53
+btnRow2.Parent = t7
+local br2Layout = Instance.new("UIListLayout", btnRow2)
+br2Layout.FillDirection = Enum.FillDirection.Horizontal
+br2Layout.Padding = UDim.new(0.04, 0)
+
+configButton(btnRow2, "⚡ SET AUTOLOAD", C.cyber_yellow, 1, function()
+	local name = configNameHolder.value
+	if name == "" then
+		showToast("ERROR", "Enter a config name first", C.cyber_red, "✕")
+		return
+	end
+	setAutoload(name)
+	showToast("AUTOLOAD", "'" .. name .. "' will auto-load on join", C.cyber_yellow, "⚡")
+	autoloadLbl.Text = "// AUTOLOAD: " .. name
+end)
+
+configButton(btnRow2, "🗑 DELETE CONFIG", C.cyber_red, 2, function()
+	local name = configNameHolder.value
+	if name == "" then return end
+	deleteConfig(name)
+	-- Clear autoload if this was it
+	if getAutoload() == name then
+		clearAutoload()
+		autoloadLbl.Text = "// AUTOLOAD: None"
+	end
+	showToast("DELETED", "Config '" .. name .. "' deleted", C.cyber_red, "🗑")
+end)
+
+-- Button row 3: Clear Autoload / Reset Defaults
+local btnRow3 = Instance.new("Frame")
+btnRow3.Size = UDim2.new(1, 0, 0, 28)
+btnRow3.BackgroundTransparency = 1
+btnRow3.LayoutOrder = 17
+btnRow3.ZIndex = 53
+btnRow3.Parent = t7
+local br3Layout = Instance.new("UIListLayout", btnRow3)
+br3Layout.FillDirection = Enum.FillDirection.Horizontal
+br3Layout.Padding = UDim.new(0.04, 0)
+
+configButton(btnRow3, "✕ CLEAR AUTOLOAD", C.cyber_orange, 1, function()
+	clearAutoload()
+	showToast("CLEARED", "Autoload disabled", C.cyber_orange, "✕")
+	autoloadLbl.Text = "// AUTOLOAD: None"
+end)
+
+configButton(btnRow3, "↺ RESET DEFAULTS", C.cyber_purple, 2, function()
+	-- This would ideally reload defaults, for now show toast
+	showToast("RESET", "Restart to apply defaults", C.cyber_purple, "↺")
+end)
+
+-- Autoload status label
+local autoloadName = getAutoload()
+autoloadLbl = Instance.new("TextLabel")
+autoloadLbl.Size = UDim2.new(1, 0, 0, 18)
+autoloadLbl.BackgroundTransparency = 1
+autoloadLbl.Text = autoloadName ~= "" and ("// AUTOLOAD: " .. autoloadName) or "// AUTOLOAD: None"
+autoloadLbl.TextColor3 = C.cyber_yellow
+autoloadLbl.TextSize = 9
+autoloadLbl.Font = Enum.Font.GothamBold
+autoloadLbl.TextXAlignment = Enum.TextXAlignment.Left
+autoloadLbl.LayoutOrder = 18
+autoloadLbl.ZIndex = 53
+autoloadLbl.Parent = t7
+
+-- Saved configs list header
+header(t7, "Saved Configs", 19)
+
+-- Config list display (refreshes dynamically)
+local configListFrame = Instance.new("Frame")
+configListFrame.Size = UDim2.new(1, 0, 0, 0)
+configListFrame.BackgroundTransparency = 1
+configListFrame.AutomaticSize = Enum.AutomaticSize.Y
+configListFrame.LayoutOrder = 20
+configListFrame.ZIndex = 53
+configListFrame.Parent = t7
+local clfLayout = Instance.new("UIListLayout", configListFrame)
+clfLayout.Padding = UDim.new(0, 4)
+clfLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local function refreshConfigList()
+	-- Clear old entries
+	for _, c in ipairs(configListFrame:GetChildren()) do
+		if c:IsA("Frame") then c:Destroy() end
+	end
+
+	local configs = getConfigList()
+	local currentAutoload = getAutoload()
+
+	if #configs == 0 then
+		local emptyLbl = Instance.new("TextLabel")
+		emptyLbl.Size = UDim2.new(1, 0, 0, 24)
+		emptyLbl.BackgroundTransparency = 1
+		emptyLbl.Text = "No saved configs yet"
+		emptyLbl.TextColor3 = C.dim
+		emptyLbl.TextSize = 9
+		emptyLbl.Font = Enum.Font.GothamMedium
+		emptyLbl.TextXAlignment = Enum.TextXAlignment.Left
+		emptyLbl.ZIndex = 54
+		emptyLbl.Parent = configListFrame
+		return
+	end
+
+	for i, name in ipairs(configs) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, 0, 0, 26)
+		row.BackgroundColor3 = C.card_glass
+		row.BackgroundTransparency = 0.3
+		row.BorderSizePixel = 0
+		row.LayoutOrder = i
+		row.ZIndex = 53
+		row.Parent = configListFrame
+		Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+
+		local isAuto = (name == currentAutoload)
+
+		local nameLbl = Instance.new("TextLabel")
+		nameLbl.Size = UDim2.new(0.5, 0, 1, 0)
+		nameLbl.Position = UDim2.new(0, 8, 0, 0)
+		nameLbl.BackgroundTransparency = 1
+		nameLbl.Text = (isAuto and "⚡ " or "   ") .. name
+		nameLbl.TextColor3 = isAuto and C.cyber_yellow or C.text
+		nameLbl.TextSize = 10
+		nameLbl.Font = Enum.Font.GothamMedium
+		nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+		nameLbl.ZIndex = 54
+		nameLbl.Parent = row
+
+		-- Quick load button
+		local loadBtn = Instance.new("TextButton")
+		loadBtn.Size = UDim2.new(0, 50, 0, 18)
+		loadBtn.Position = UDim2.new(1, -62, 0.5, 0)
+		loadBtn.AnchorPoint = Vector2.new(0, 0.5)
+		loadBtn.BackgroundColor3 = C.cyber_cyan
+		loadBtn.BackgroundTransparency = 0.7
+		loadBtn.Text = "LOAD"
+		loadBtn.TextColor3 = C.cyber_cyan
+		loadBtn.TextSize = 8
+		loadBtn.Font = Enum.Font.GothamBold
+		loadBtn.BorderSizePixel = 0
+		loadBtn.ZIndex = 54
+		loadBtn.Parent = row
+		Instance.new("UICorner", loadBtn).CornerRadius = UDim.new(0, 4)
+
+		loadBtn.MouseButton1Click:Connect(function()
+			local ok = loadConfig(name)
+			if ok then
+				showToast("LOADED", "Config '" .. name .. "' applied", C.cyber_green, "📂")
+				updateStatusBar()
+			end
+		end)
+	end
+end
+
+-- Refresh list whenever QOL tab is opened
+Tabs[7].btn.MouseButton1Click:Connect(function()
+	spawn(function()
+		wait(0.1)
+		refreshConfigList()
+	end)
+end)
+
+-- Initial refresh
+spawn(function()
+	wait(0.5)
+	refreshConfigList()
+end)
+
+-- ========================
+--  AUTOLOAD ON JOIN
+-- ========================
+spawn(function()
+	wait(1.5)
+	local autoName = getAutoload()
+	if autoName and autoName ~= "" then
+		local ok = loadConfig(autoName)
+		if ok then
+			showToast("AUTOLOAD", "Config '" .. autoName .. "' loaded", C.cyber_yellow, "⚡")
+			updateStatusBar()
+		end
+	end
+end)
 
 -- TAB 8: STATS DASHBOARD
 local t8 = Tabs[8].frame
@@ -1884,7 +2312,7 @@ local function executeTrigger()
 		-- Show burst indicator
 		if S.Trigger_Indicator then
 			TriggerIndicator.Text = "TB: BURST x" .. S.Trigger_BurstCount
-			TriggerIndicator.TextColor3 = C.orange
+			TriggerIndicator.TextColor3 = C.cyber_orange
 			spawn(function()
 				wait(0.3)
 				TriggerIndicator.Text = "TB: READY"
@@ -1896,7 +2324,7 @@ local function executeTrigger()
 		safeClick()
 		if S.Trigger_Indicator then
 			TriggerIndicator.Text = "TB: FIRED"
-			TriggerIndicator.TextColor3 = C.yellow
+			TriggerIndicator.TextColor3 = C.cyber_yellow
 			spawn(function()
 				wait(0.15)
 				TriggerIndicator.Text = "TB: READY"
@@ -2549,7 +2977,7 @@ local function teleportBehindEnemy()
 		-- Flash red to show no target
 		spawn(function()
 			TPLabel.Text = "NO TARGET"
-			TPLabel.TextColor3 = C.red
+			TPLabel.TextColor3 = C.cyber_red
 			wait(1)
 			TPLabel.Text = "TP READY"
 			TPLabel.TextColor3 = C.cyber_cyan
@@ -2607,7 +3035,7 @@ local function teleportBehindEnemy()
 	TPCooldownBg.Visible = true
 	TPLabel.Visible = true
 	TPLabel.Text = "COOLDOWN..."
-	TPLabel.TextColor3 = C.red
+	TPLabel.TextColor3 = C.cyber_red
 
 	spawn(function()
 		local cd = S.TP_Behind_Cooldown
@@ -2779,7 +3207,7 @@ RunService.RenderStepped:Connect(function(dt)
 			if trigTarget then
 				if S.Trigger_Indicator then
 					TriggerIndicator.Text = "TB: TARGET"
-					TriggerIndicator.TextColor3 = C.red
+					TriggerIndicator.TextColor3 = C.cyber_red
 				end
 				executeTrigger()
 			else
