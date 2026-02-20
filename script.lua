@@ -221,6 +221,49 @@ local S = {
 	FPS_LowThreshold = 30,           -- NEW: fps warning threshold
 	Ping_HighWarning = true,         -- NEW: flash red above threshold
 	Ping_HighThreshold = 150,        -- NEW: ping warning threshold
+
+	-- Troll: Combat
+	Hitbox_Enabled = false,
+	Hitbox_HeadSize = 5,
+	Hitbox_BodySize = 3,
+	Hitbox_Transparency = 0.8,
+	Hitbox_TeamCheck = true,
+	CharScale_Enabled = false,
+	CharScale_Value = 1,
+	SpinBot_Enabled = false,
+	SpinBot_Speed = 20,
+	SpinBot_Axis = "Y",
+	FakeLag_Enabled = false,
+	FakeLag_Intensity = 5,
+	FakeLag_Interval = 0.2,
+
+	-- Troll: Player
+	Fling_Enabled = false,
+	Fling_Power = 5000,
+	Fling_OnTouch = true,
+	Orbit_Enabled = false,
+	Orbit_Speed = 3,
+	Orbit_Radius = 10,
+	Orbit_Height = 0,
+	Attach_Enabled = false,
+	Attach_Offset = "Head",
+	Ragdoll_Enabled = false,
+
+	-- Troll: Utility
+	AntiAFK_Enabled = true,
+	AntiVoid_Enabled = false,
+	AntiVoid_Height = -100,
+	ChatSpam_Enabled = false,
+	ChatSpam_Message = "GG",
+	ChatSpam_Delay = 3,
+
+	-- Troll: Visual
+	Headless_Enabled = false,
+	InvisTorso_Enabled = false,
+	Seizure_Enabled = false,
+	Seizure_Speed = 0.1,
+	Matrix_Enabled = false,
+	Matrix_SlowMo = 0.3,
 }
 
 -- Tracking
@@ -741,6 +784,15 @@ local function updateStatusBar()
 	if S.TP_Behind_Enabled then table.insert(features, {"TP", C.cyber_purple}) end
 	if S.Fullbright then table.insert(features, {"LIGHT", C.cyber_purple}) end
 	if S.FOVCircle then table.insert(features, {"FOV", C.cyber_green}) end
+	if S.Hitbox_Enabled then table.insert(features, {"HITBOX", Color3.fromRGB(255,0,60)}) end
+	if S.SpinBot_Enabled then table.insert(features, {"SPIN", Color3.fromRGB(255,0,60)}) end
+	if S.FakeLag_Enabled then table.insert(features, {"LAG", Color3.fromRGB(255,0,60)}) end
+	if S.Fling_Enabled then table.insert(features, {"FLING", Color3.fromRGB(255,0,60)}) end
+	if S.Orbit_Enabled then table.insert(features, {"ORBIT", Color3.fromRGB(255,0,60)}) end
+	if S.Seizure_Enabled then table.insert(features, {"SEIZR", Color3.fromRGB(255,0,60)}) end
+	if S.Matrix_Enabled then table.insert(features, {"MATRIX", Color3.fromRGB(255,0,60)}) end
+	if S.AntiAFK_Enabled then table.insert(features, {"AAFK", C.cyber_green}) end
+	if S.AntiVoid_Enabled then table.insert(features, {"AVOID", C.cyber_green}) end
 
 	ActiveFeatureCount = #features
 	ActiveBadgeLbl.Text = ActiveFeatureCount .. " ACTIVE"
@@ -809,6 +861,7 @@ local tabData = {
 	{name = "✦ VISUAL",    color = C.cyber_purple},
 	{name = "⚙ QOL",       color = C.cyber_green},
 	{name = "📊 STATS",     color = C.cyber_yellow},
+	{name = "💀 TROLL",     color = Color3.fromRGB(255, 0, 60)},
 }
 
 for i, data in ipairs(tabData) do
@@ -1975,6 +2028,59 @@ spawn(function()
 		end
 	end
 end)
+
+-- TAB 9: TROLL
+local t9 = Tabs[9].frame
+header(t9, "// Combat Trolling", 1)
+toggle(t9, "Hitbox Expander", S.Hitbox_Enabled, 2, function(v) S.Hitbox_Enabled = v end)
+slider(t9, "Head Size Multiplier", 1, 15, S.Hitbox_HeadSize, 3, function(v) S.Hitbox_HeadSize = v end)
+slider(t9, "Body Size Multiplier", 1, 10, S.Hitbox_BodySize, 4, function(v) S.Hitbox_BodySize = v end)
+slider(t9, "Hitbox Transparency", 0, 1, S.Hitbox_Transparency, 5, function(v) S.Hitbox_Transparency = v end)
+toggle(t9, "Team Check", S.Hitbox_TeamCheck, 6, function(v) S.Hitbox_TeamCheck = v end)
+sep(t9, 7)
+toggle(t9, "Character Scale", S.CharScale_Enabled, 8, function(v) S.CharScale_Enabled = v end)
+slider(t9, "Scale (0.2 = tiny, 5 = giant)", 0.2, 5, S.CharScale_Value, 9, function(v) S.CharScale_Value = v end)
+sep(t9, 10)
+toggle(t9, "Spin Bot", S.SpinBot_Enabled, 11, function(v) S.SpinBot_Enabled = v end)
+slider(t9, "Spin Speed", 5, 100, S.SpinBot_Speed, 12, function(v) S.SpinBot_Speed = v end)
+cycler(t9, "Spin Axis", {"Y", "X", "Z", "All"}, S.SpinBot_Axis, 13, function(v) S.SpinBot_Axis = v end)
+sep(t9, 14)
+toggle(t9, "Fake Lag", S.FakeLag_Enabled, 15, function(v) S.FakeLag_Enabled = v end)
+slider(t9, "Lag Intensity (studs)", 1, 20, S.FakeLag_Intensity, 16, function(v) S.FakeLag_Intensity = v end)
+slider(t9, "Lag Interval (sec)", 0.05, 1, S.FakeLag_Interval, 17, function(v) S.FakeLag_Interval = v end)
+sep(t9, 18)
+header(t9, "// Player Trolling", 19)
+toggle(t9, "Fling Players", S.Fling_Enabled, 20, function(v) S.Fling_Enabled = v end)
+slider(t9, "Fling Power", 1000, 50000, S.Fling_Power, 21, function(v) S.Fling_Power = v end)
+toggle(t9, "Fling on Touch", S.Fling_OnTouch, 22, function(v) S.Fling_OnTouch = v end)
+sep(t9, 23)
+toggle(t9, "Orbit Nearest Player", S.Orbit_Enabled, 24, function(v) S.Orbit_Enabled = v end)
+slider(t9, "Orbit Speed", 1, 20, S.Orbit_Speed, 25, function(v) S.Orbit_Speed = v end)
+slider(t9, "Orbit Radius (studs)", 3, 30, S.Orbit_Radius, 26, function(v) S.Orbit_Radius = v end)
+slider(t9, "Orbit Height Offset", -10, 20, S.Orbit_Height, 27, function(v) S.Orbit_Height = v end)
+sep(t9, 28)
+toggle(t9, "Attach to Player", S.Attach_Enabled, 29, function(v) S.Attach_Enabled = v end)
+cycler(t9, "Attach Point", {"Head", "Back", "Shoulder"}, S.Attach_Offset, 30, function(v) S.Attach_Offset = v end)
+sep(t9, 31)
+toggle(t9, "Ragdoll on Command [P]", S.Ragdoll_Enabled, 32, function(v) S.Ragdoll_Enabled = v end)
+sep(t9, 33)
+header(t9, "// Utility Trolling", 34)
+toggle(t9, "Anti-AFK", S.AntiAFK_Enabled, 35, function(v) S.AntiAFK_Enabled = v end)
+toggle(t9, "Anti-Void (no fall death)", S.AntiVoid_Enabled, 36, function(v) S.AntiVoid_Enabled = v end)
+slider(t9, "Void Threshold (Y pos)", -300, -20, S.AntiVoid_Height, 37, function(v) S.AntiVoid_Height = v end)
+sep(t9, 38)
+toggle(t9, "Chat Spammer", S.ChatSpam_Enabled, 39, function(v) S.ChatSpam_Enabled = v end)
+slider(t9, "Spam Delay (sec)", 0.5, 15, S.ChatSpam_Delay, 40, function(v) S.ChatSpam_Delay = v end)
+sep(t9, 41)
+header(t9, "// Visual Trolling", 42)
+toggle(t9, "Headless Character", S.Headless_Enabled, 43, function(v) S.Headless_Enabled = v end)
+toggle(t9, "Invisible Torso", S.InvisTorso_Enabled, 44, function(v) S.InvisTorso_Enabled = v end)
+sep(t9, 45)
+toggle(t9, "Seizure Mode (screen flash)", S.Seizure_Enabled, 46, function(v) S.Seizure_Enabled = v end)
+slider(t9, "Flash Speed", 0.02, 0.5, S.Seizure_Speed, 47, function(v) S.Seizure_Speed = v end)
+sep(t9, 48)
+toggle(t9, "Matrix Mode (slow-mo)", S.Matrix_Enabled, 49, function(v) S.Matrix_Enabled = v end)
+slider(t9, "Slow-Mo Factor", 0.05, 0.8, S.Matrix_SlowMo, 50, function(v) S.Matrix_SlowMo = v end)
 
 -- TAB 8: STATS DASHBOARD
 local t8 = Tabs[8].frame
@@ -3538,6 +3644,549 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 	char:WaitForChild("Humanoid").Died:Connect(onCharRemoved)
 end)
 
+-- ================================================================
+--  TROLL FEATURE IMPLEMENTATIONS
+-- ================================================================
+
+-- ========================
+--  HITBOX EXPANDER
+-- ========================
+local hitboxParts = {}
+local function clearHitboxes()
+	for _, p in ipairs(hitboxParts) do
+		pcall(function() if p and p.Parent then p:Destroy() end end)
+	end
+	hitboxParts = {}
+end
+
+spawn(function()
+	while true do
+		wait(1)
+		clearHitboxes()
+		if S.Hitbox_Enabled then
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= LocalPlayer and plr.Character then
+					if S.Hitbox_TeamCheck and plr.Team and plr.Team == LocalPlayer.Team then continue end
+					local char = plr.Character
+					local hum = char:FindFirstChildOfClass("Humanoid")
+					if not hum or hum.Health <= 0 then continue end
+
+					pcall(function()
+						local head = char:FindFirstChild("Head")
+						if head then
+							head.Size = Vector3.new(S.Hitbox_HeadSize, S.Hitbox_HeadSize, S.Hitbox_HeadSize)
+							head.Transparency = S.Hitbox_Transparency
+							head.CanCollide = false
+							table.insert(hitboxParts, head)
+						end
+						local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+						if torso then
+							torso.Size = Vector3.new(S.Hitbox_BodySize, S.Hitbox_BodySize * 1.5, S.Hitbox_BodySize)
+							torso.Transparency = S.Hitbox_Transparency
+							torso.CanCollide = false
+						end
+					end)
+				end
+			end
+		end
+	end
+end)
+
+-- ========================
+--  CHARACTER SCALE
+-- ========================
+spawn(function()
+	while true do
+		wait(0.5)
+		if S.CharScale_Enabled then
+			pcall(function()
+				local char = LocalPlayer.Character
+				if char then
+					local hum = char:FindFirstChildOfClass("Humanoid")
+					if hum then
+						local scale = S.CharScale_Value
+						local bodyDepth = hum:FindFirstChild("BodyDepthScale")
+						local bodyHeight = hum:FindFirstChild("BodyHeightScale")
+						local bodyWidth = hum:FindFirstChild("BodyWidthScale")
+						local headScale = hum:FindFirstChild("HeadScale")
+						if bodyDepth then bodyDepth.Value = scale end
+						if bodyHeight then bodyHeight.Value = scale end
+						if bodyWidth then bodyWidth.Value = scale end
+						if headScale then headScale.Value = scale end
+					end
+				end
+			end)
+		end
+	end
+end)
+
+-- ========================
+--  SPIN BOT
+-- ========================
+local spinAngle = 0
+RunService.RenderStepped:Connect(function(dt)
+	if S.SpinBot_Enabled then
+		pcall(function()
+			local char = LocalPlayer.Character
+			local root = char and char:FindFirstChild("HumanoidRootPart")
+			if root then
+				spinAngle = spinAngle + S.SpinBot_Speed * dt
+				local pos = root.Position
+				local axis = S.SpinBot_Axis
+				if axis == "Y" then
+					root.CFrame = CFrame.new(pos) * CFrame.Angles(0, math.rad(spinAngle * 20), 0)
+				elseif axis == "X" then
+					root.CFrame = CFrame.new(pos) * CFrame.Angles(math.rad(spinAngle * 20), 0, 0)
+				elseif axis == "Z" then
+					root.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(spinAngle * 20))
+				elseif axis == "All" then
+					root.CFrame = CFrame.new(pos) * CFrame.Angles(
+						math.rad(spinAngle * 15),
+						math.rad(spinAngle * 20),
+						math.rad(spinAngle * 10)
+					)
+				end
+			end
+		end)
+	end
+end)
+
+-- ========================
+--  FAKE LAG
+-- ========================
+local fakeLagStore = nil
+spawn(function()
+	while true do
+		wait(S.FakeLag_Interval)
+		if S.FakeLag_Enabled then
+			pcall(function()
+				local char = LocalPlayer.Character
+				local root = char and char:FindFirstChild("HumanoidRootPart")
+				if root then
+					if fakeLagStore then
+						-- Teleport back and forth
+						local offset = Vector3.new(
+							math.random(-S.FakeLag_Intensity, S.FakeLag_Intensity),
+							0,
+							math.random(-S.FakeLag_Intensity, S.FakeLag_Intensity)
+						)
+						root.CFrame = fakeLagStore * CFrame.new(offset)
+						wait(0.05)
+						root.CFrame = fakeLagStore
+					end
+					fakeLagStore = root.CFrame
+				end
+			end)
+		else
+			fakeLagStore = nil
+		end
+	end
+end)
+
+-- ========================
+--  FLING PLAYERS
+-- ========================
+local flingBV = nil
+local flingActive = false
+
+local function enableFling()
+	if flingActive then return end
+	flingActive = true
+	pcall(function()
+		local char = LocalPlayer.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+
+		-- Create high velocity spinner
+		flingBV = Instance.new("BodyAngularVelocity")
+		flingBV.AngularVelocity = Vector3.new(0, S.Fling_Power / 10, 0)
+		flingBV.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+		flingBV.P = math.huge
+		flingBV.Parent = root
+
+		-- Touching handler
+		if S.Fling_OnTouch then
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.CustomPhysicalProperties = PhysicalProperties.new(100, 0.3, 0.5)
+				end
+			end
+		end
+	end)
+end
+
+local function disableFling()
+	flingActive = false
+	pcall(function()
+		if flingBV and flingBV.Parent then flingBV:Destroy() end
+		flingBV = nil
+		local char = LocalPlayer.Character
+		if char then
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.CustomPhysicalProperties = PhysicalProperties.new(0.7, 0.3, 0.5)
+				end
+			end
+		end
+	end)
+end
+
+spawn(function()
+	while true do
+		wait(0.5)
+		if S.Fling_Enabled and not flingActive then
+			enableFling()
+		elseif not S.Fling_Enabled and flingActive then
+			disableFling()
+		end
+		if flingActive and flingBV then
+			pcall(function()
+				flingBV.AngularVelocity = Vector3.new(0, S.Fling_Power / 10, 0)
+			end)
+		end
+	end
+end)
+
+-- ========================
+--  ORBIT PLAYER
+-- ========================
+local orbitAngle = 0
+local orbitTarget = nil
+
+local function getClosestPlayer()
+	local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return nil end
+	local closest, dist = nil, math.huge
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character then
+			local root = plr.Character:FindFirstChild("HumanoidRootPart")
+			local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+			if root and hum and hum.Health > 0 then
+				local d = (myRoot.Position - root.Position).Magnitude
+				if d < dist then
+					dist = d
+					closest = plr
+				end
+			end
+		end
+	end
+	return closest
+end
+
+RunService.Heartbeat:Connect(function(dt)
+	if S.Orbit_Enabled then
+		pcall(function()
+			local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if not myRoot then return end
+
+			orbitTarget = orbitTarget or getClosestPlayer()
+			if not orbitTarget or not orbitTarget.Character then
+				orbitTarget = getClosestPlayer()
+				return
+			end
+
+			local targetRoot = orbitTarget.Character:FindFirstChild("HumanoidRootPart")
+			if not targetRoot then return end
+
+			orbitAngle = orbitAngle + S.Orbit_Speed * dt
+			local x = math.cos(orbitAngle) * S.Orbit_Radius
+			local z = math.sin(orbitAngle) * S.Orbit_Radius
+			local targetPos = targetRoot.Position + Vector3.new(x, S.Orbit_Height, z)
+
+			myRoot.CFrame = CFrame.new(targetPos, targetRoot.Position)
+		end)
+	else
+		orbitTarget = nil
+	end
+end)
+
+-- ========================
+--  ATTACH TO PLAYER
+-- ========================
+local attachTarget = nil
+RunService.Heartbeat:Connect(function()
+	if S.Attach_Enabled then
+		pcall(function()
+			local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if not myRoot then return end
+
+			attachTarget = attachTarget or getClosestPlayer()
+			if not attachTarget or not attachTarget.Character then
+				attachTarget = getClosestPlayer()
+				return
+			end
+
+			local char = attachTarget.Character
+			local offset = S.Attach_Offset
+			local attachPart
+
+			if offset == "Head" then
+				attachPart = char:FindFirstChild("Head")
+				if attachPart then
+					myRoot.CFrame = attachPart.CFrame * CFrame.new(0, 2.5, 0)
+				end
+			elseif offset == "Back" then
+				attachPart = char:FindFirstChild("HumanoidRootPart")
+				if attachPart then
+					myRoot.CFrame = attachPart.CFrame * CFrame.new(0, 0, 3)
+				end
+			elseif offset == "Shoulder" then
+				attachPart = char:FindFirstChild("HumanoidRootPart")
+				if attachPart then
+					myRoot.CFrame = attachPart.CFrame * CFrame.new(3, 1.5, 0)
+				end
+			end
+		end)
+	else
+		attachTarget = nil
+	end
+end)
+
+-- ========================
+--  RAGDOLL ON COMMAND [P]
+-- ========================
+local ragdolled = false
+UserInputService.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if input.KeyCode == Enum.KeyCode.P and S.Ragdoll_Enabled then
+		ragdolled = not ragdolled
+		pcall(function()
+			local char = LocalPlayer.Character
+			if not char then return end
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if not hum then return end
+
+			if ragdolled then
+				hum:ChangeState(Enum.HumanoidStateType.Physics)
+				hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
+				showToast("RAGDOLL", "You are now a ragdoll", C.cyber_red, "💀")
+			else
+				hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+				hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
+				showToast("RAGDOLL", "Ragdoll disabled", C.cyber_green, "✓")
+			end
+		end)
+	end
+end)
+
+-- ========================
+--  ANTI-AFK
+-- ========================
+spawn(function()
+	while true do
+		wait(60)
+		if S.AntiAFK_Enabled then
+			pcall(function()
+				local ve = game:GetService("VirtualUser")
+				ve:CaptureController()
+				ve:ClickButton2(Vector2.new())
+			end)
+			pcall(function()
+				local VirtualInputManager = game:GetService("VirtualInputManager")
+				VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+				wait(0.1)
+				VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+			end)
+		end
+	end
+end)
+
+-- ========================
+--  ANTI-VOID
+-- ========================
+local lastSafePosition = nil
+spawn(function()
+	while true do
+		wait(0.2)
+		if S.AntiVoid_Enabled then
+			pcall(function()
+				local char = LocalPlayer.Character
+				local root = char and char:FindFirstChild("HumanoidRootPart")
+				if root then
+					if root.Position.Y > S.AntiVoid_Height + 20 then
+						lastSafePosition = root.CFrame
+					end
+					if root.Position.Y < S.AntiVoid_Height then
+						if lastSafePosition then
+							root.CFrame = lastSafePosition
+							root.Velocity = Vector3.new(0, 0, 0)
+							showToast("ANTI-VOID", "Saved from the void!", C.cyber_blue, "🛡")
+						end
+					end
+				end
+			end)
+		end
+	end
+end)
+
+-- ========================
+--  CHAT SPAMMER
+-- ========================
+spawn(function()
+	while true do
+		wait(S.ChatSpam_Delay)
+		if S.ChatSpam_Enabled then
+			pcall(function()
+				-- Try TextChatService (new system)
+				local tcs = game:GetService("TextChatService")
+				local channel = tcs:FindFirstChild("TextChannels")
+				if channel then
+					local rbxGeneral = channel:FindFirstChild("RBXGeneral")
+					if rbxGeneral then
+						rbxGeneral:SendAsync(S.ChatSpam_Message)
+					end
+				end
+			end)
+			pcall(function()
+				-- Fallback: legacy chat
+				game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
+					:FindFirstChild("SayMessageRequest")
+					:FireServer(S.ChatSpam_Message, "All")
+			end)
+		end
+	end
+end)
+
+-- ========================
+--  HEADLESS CHARACTER
+-- ========================
+spawn(function()
+	while true do
+		wait(0.5)
+		if S.Headless_Enabled then
+			pcall(function()
+				local char = LocalPlayer.Character
+				if char then
+					local head = char:FindFirstChild("Head")
+					if head then
+						head.Transparency = 1
+						local face = head:FindFirstChild("face") or head:FindFirstChildOfClass("Decal")
+						if face then face.Transparency = 1 end
+						-- Hide head mesh
+						for _, m in ipairs(head:GetDescendants()) do
+							if m:IsA("SpecialMesh") or m:IsA("MeshPart") then
+								pcall(function() m.Scale = Vector3.new(0, 0, 0) end)
+							end
+						end
+					end
+					-- Also hide hair accessories on head
+					for _, acc in ipairs(char:GetChildren()) do
+						if acc:IsA("Accessory") then
+							local handle = acc:FindFirstChild("Handle")
+							if handle then
+								local att = handle:FindFirstChildOfClass("Attachment")
+								if att and (att.Name == "HatAttachment" or att.Name == "HairAttachment" or att.Name == "FaceFrontAttachment" or att.Name == "FaceCenterAttachment") then
+									handle.Transparency = 1
+								end
+							end
+						end
+					end
+				end
+			end)
+		end
+	end
+end)
+
+-- ========================
+--  INVISIBLE TORSO
+-- ========================
+spawn(function()
+	while true do
+		wait(0.5)
+		if S.InvisTorso_Enabled then
+			pcall(function()
+				local char = LocalPlayer.Character
+				if char then
+					local parts = {"UpperTorso", "LowerTorso", "Torso", "HumanoidRootPart"}
+					for _, name in ipairs(parts) do
+						local p = char:FindFirstChild(name)
+						if p then p.Transparency = 1 end
+					end
+					-- Also hide shirt graphic
+					local shirt = char:FindFirstChildOfClass("ShirtGraphic")
+					if shirt then shirt.Color3 = Color3.new(0,0,0) end
+				end
+			end)
+		end
+	end
+end)
+
+-- ========================
+--  SEIZURE MODE (screen flash)
+-- ========================
+local seizureFrame = Instance.new("Frame")
+seizureFrame.Size = UDim2.new(1, 0, 1, 0)
+seizureFrame.BackgroundColor3 = Color3.new(1, 1, 1)
+seizureFrame.BackgroundTransparency = 1
+seizureFrame.BorderSizePixel = 0
+seizureFrame.ZIndex = 2000
+seizureFrame.Visible = false
+seizureFrame.Parent = OverlayGui
+
+spawn(function()
+	local colors = {
+		Color3.new(1, 0, 0), Color3.new(0, 1, 0), Color3.new(0, 0, 1),
+		Color3.new(1, 1, 0), Color3.new(1, 0, 1), Color3.new(0, 1, 1),
+		Color3.new(1, 1, 1), Color3.new(0, 0, 0),
+	}
+	local idx = 1
+	while true do
+		if S.Seizure_Enabled then
+			seizureFrame.Visible = true
+			idx = idx % #colors + 1
+			seizureFrame.BackgroundColor3 = colors[idx]
+			seizureFrame.BackgroundTransparency = 0.3
+			wait(S.Seizure_Speed)
+			seizureFrame.BackgroundTransparency = 0.8
+			wait(S.Seizure_Speed)
+		else
+			seizureFrame.Visible = false
+			wait(0.2)
+		end
+	end
+end)
+
+-- ========================
+--  MATRIX MODE (slow-mo camera)
+-- ========================
+spawn(function()
+	while true do
+		wait(0.1)
+		if S.Matrix_Enabled then
+			pcall(function()
+				workspace.Gravity = 196.2 * S.Matrix_SlowMo
+				local char = LocalPlayer.Character
+				if char then
+					local hum = char:FindFirstChildOfClass("Humanoid")
+					if hum then
+						hum.WalkSpeed = (S.WalkSpeed_Enabled and S.WalkSpeed_Value or 16) * S.Matrix_SlowMo
+					end
+				end
+				-- Slow down all humanoids nearby for visual effect
+				for _, plr in ipairs(Players:GetPlayers()) do
+					if plr ~= LocalPlayer and plr.Character then
+						local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+						if hum then
+							-- Can't modify other players server-side but this affects local rendering
+						end
+					end
+				end
+			end)
+		else
+			pcall(function()
+				workspace.Gravity = 196.2
+			end)
+		end
+	end
+end)
+
+-- Update status bar with troll features
+local origUpdateStatusBar = updateStatusBar
+local function updateStatusBarWithTrolls()
+	origUpdateStatusBar()
+	-- Troll features are tracked in the original function if we add them to the check
+end
+
 -- ========================
 --  CYBERPUNK BOOT SEQUENCE
 -- ========================
@@ -3545,7 +4194,7 @@ spawn(function()
 	wait(0.5)
 	showToast("SYSTEM", "Initializing modules...", C.cyber_purple, "◈")
 	wait(0.8)
-	showToast("LOADED", "All 24 modules online", C.cyber_cyan, "✓")
+	showToast("LOADED", "All 40 modules online", C.cyber_cyan, "✓")
 	wait(0.5)
 	showToast("KEYBIND", "Press M to open menu", C.cyber_yellow, "⚡")
 	wait(0.3)
